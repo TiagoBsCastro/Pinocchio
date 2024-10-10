@@ -40,10 +40,6 @@ double **rvector_fft;
 param_data params={0};
 output_data outputs;
 subbox_data subbox;
-#ifdef PLC
-plc_data plc;
-plcgroup_data *plcgroups;
-#endif
 
 cputime_data cputime={0.0};
 
@@ -64,10 +60,6 @@ mf_data mf;
 
 gsl_spline **SPLINE;
 gsl_interp_accel **ACCEL;
-
-#ifdef MOD_GRAV_FR
-double H_over_c;
-#endif
 
 memory_data memory;
 

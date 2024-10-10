@@ -101,9 +101,8 @@ OBJECTS = \
 	  ReadParamfile.o \
 	  allocations.o \
 	  LPT.o \
-	  collapse_times.o \
-	  write_snapshot.o
-#fragment.o distribute.o build_groups.o write_halos.o collapse_times_GPU.o cubic_spline_interpolation.o
+	  collapse_times.o 
+#write_snapshot.o fragment.o distribute.o build_groups.o write_halos.o collapse_times_GPU.o cubic_spline_interpolation.o
 
 # Main targets and rules
 

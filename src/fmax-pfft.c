@@ -429,12 +429,7 @@ void write_in_cvector(int ThisGrid, double * restrict vector)
   dvec * restrict source = (dvec*)vector;
   int mysize = GRID.total_local_size_fft/DVEC_SIZE;
 
-#if !defined(_OPENMP)  
 #pragma GCC ivdep
-#endif
-#ifdef _OPENMP
-#pragma omp for schedule(simd:static)
-#endif
   for ( int i = 0; i < mysize; i++ )
     *(target + i) = *(source + i);
 
@@ -457,12 +452,7 @@ void write_from_cvector(int ThisGrid, double * restrict vector)
 
   int mysize = GRID.total_local_size_fft/DVEC_SIZE;
 
-#if !defined(_OPENMP)
 #pragma GCC ivdep
-#endif
-#ifdef _OPENMP
-#pragma omp for schedule(simd:static)  
-#endif
   for ( int i = 0; i < mysize; i++ )
     *(target + i) = *(source + i);
 
@@ -483,12 +473,7 @@ void write_in_rvector(int ThisGrid, double * restrict vector)
   dvec * restrict source = (dvec*)vector;
   int mysize = GRID.total_local_size / DVEC_SIZE;
 
-#if !defined(_OPENMP)
 #pragma GCC ivdep
-#endif  
-#ifdef _OPENMP
-#pragma omp for schedule(simd:static)  
-#endif
   for( int i = 0; i < mysize; i++ )
     *(target + i) = *(source + i);
   
@@ -508,12 +493,7 @@ void write_from_rvector(int ThisGrid, double * restrict vector)
   dvec * restrict target = (dvec*)vector;
   int mysize = GRID.total_local_size / DVEC_SIZE;
 
-#if !defined(_OPENMP)
 #pragma GCC ivdep
-#endif
-#ifdef _OPENMP
-#pragma omp for schedule(simd:static)  
-#endif
   for( int i = 0; i < mysize; i++ )
     *(target + i) = *(source + i);
 

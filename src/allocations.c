@@ -173,10 +173,6 @@ int organize_main_memory()
   ALIGN_MEMORY_BLOCK( memory.groups );
   memory.groups += subbox.PredNpeaks *  + sizeof(histories_data);
   ALIGN_MEMORY_BLOCK( memory.groups );
-#ifdef PLC
-  memory.groups += plc.Nmax * sizeof(plcgroup_data);
-  ALIGN_MEMORY_BLOCK( memory.groups );
-#endif
   memory.groups += subbox.maplength*sizeof(unsigned int);
   ALIGN_MEMORY_BLOCK( memory.groups );
   memory.groups += subbox.maplength*sizeof(unsigned int);
@@ -213,7 +209,7 @@ int organize_main_memory()
     + memory.fft
 #endif
     ;
-    
+
   /* this is the largest amount of memory needed by the code */
   memory.all_allocated = (memory.first_allocated > memory.frag_allocated ? memory.first_allocated : memory.frag_allocated);
   memory.all = (memory.fmax_total > memory.frag_total ? memory.fmax_total : memory.frag_total);
@@ -509,14 +505,6 @@ int reallocate_memory_for_fragmentation()
   void *last;
 #endif
 
-#ifdef SNAPSHOT
-  /* sets zacc to -1 and group_ID to 0 before redistributing it */
-  for (int i=0; i<MyGrids[0].total_local_size; i++){
-    products[i].zacc=-1;
-    products[i].group_ID = 0;
-  }
-#endif
-
 #ifndef RECOMPUTE_DISPLACEMENTS
 
   /* in this case pointers to kdensity and kvector_* are set to zero
@@ -590,11 +578,6 @@ int reallocate_memory_for_fragmentation()
   wheretoplace_mycat = (void*)(main_memory + count_memory);
   count_memory += subbox.PredNpeaks*sizeof(histories_data);
   ALIGN_MEMORY_BLOCK( count_memory );
-#ifdef PLC
-  plcgroups = (plcgroup_data *)(main_memory + count_memory);
-  count_memory+=plc.Nmax*sizeof(plcgroup_data);
-  ALIGN_MEMORY_BLOCK( count_memory );
-#endif
   group_ID = (int*)(main_memory+count_memory);
   count_memory+=subbox.Nalloc*sizeof(int);
   ALIGN_MEMORY_BLOCK( count_memory );

@@ -372,26 +372,10 @@ int generate_densities()
   if (!ThisTask)
     dprintf(VMSG, 0, "[%s] Generating density in Fourier space\n",fdate());
 
-#ifdef WHITENOISE
-
-  if (Ngrids>1)
-    {
-      if (!ThisTask)
-	dprintf(VMSG, 0, "Sorry, this works only with a single grid\n");
-      return 1;
-    }
-
-  if (read_white_noise())
-    return 1;
-
-#else
-
   int igrid;
   for (igrid=0; igrid<Ngrids; igrid++)
     if (GenIC_large(igrid))
       return 1;
-
-#endif
 
   cputime.dens = MPI_Wtime()-cputime.dens;
     if (!ThisTask)
@@ -468,388 +452,6 @@ int set_grids()
   return 0;
 }
 
-
-
-#ifdef PLC
-#define NSAFE 2.0
-
-int cone_and_cube_intersect(double *, double *, double *, double *, double , double *, double *, int *);
-double maxF(double *, double *, double *, double *, double *);
-
-int set_plc(void)
-{
-  int NAll,ir,jr,kr,ic,this,intersection,axis;
-  double Largest_r,Smallest_r,smallestr,largestr,x[3],l[3],z,d,mod,displ_variance,tdis;
-  FILE *fout;
-  char filename[LBLENGTH];
-
-  /* ordering of coordinates to accomodate for rotation caused by fft ordering */
-#ifdef ROTATE_BOX
-  static int rot[3]={1,2,0};
-#else
-  static int rot[3]={0,1,2};
-#endif
-
-  if (params.StartingzForPLC<0.)
-    {
-      plc.Nreplications=0;
-      plc.Fstart=plc.Fstop=-1.;
-      plc.Nmax=0;
-      plc.Nexpected=0;
-      if (!ThisTask)
-	printf("Negative value of StartingzForPLC, no Past Light Cone output will be given\n\n");
-
-      return 0;
-    }
-
-
-  /* here we define the vertex and axis direction of the cone */
-  if (params.PLCProvideConeData)
-    {
-      /* in this case data are provided in the parameter file */
-      plc.center[rot[0]]=params.PLCCenter[0]/params.BoxSize*params.GridSize[0];
-      plc.center[rot[1]]=params.PLCCenter[1]/params.BoxSize*params.GridSize[0];
-      plc.center[rot[2]]=params.PLCCenter[2]/params.BoxSize*params.GridSize[0];
-      plc.zvers[rot[0]]=params.PLCAxis[0];
-      plc.zvers[rot[1]]=params.PLCAxis[1];
-      plc.zvers[rot[2]]=params.PLCAxis[2];
-    }
-  else
-    {
-      /* in this case the center is randomly placed and the direction points toward the main diagonal */
-      gsl_rng_set(random_generator, params.RandomSeed);
-      plc.center[0]=gsl_rng_uniform(random_generator)*MyGrids[0].GSglobal[_x_];
-      plc.center[1]=gsl_rng_uniform(random_generator)*MyGrids[0].GSglobal[_y_];
-      plc.center[2]=gsl_rng_uniform(random_generator)*MyGrids[0].GSglobal[_z_];
-      double mytheta=acos(2*gsl_rng_uniform(random_generator)-1);
-      double myphi=gsl_rng_uniform(random_generator)*2.0*PI;
-      plc.zvers[0]=sin(mytheta)*cos(myphi);
-      plc.zvers[1]=sin(mytheta)*sin(myphi);
-      plc.zvers[2]=cos(mytheta);
-    }
-  
-  /* normalization of the cone axis direction */
-  mod=sqrt(plc.zvers[0]*plc.zvers[0]+plc.zvers[1]*plc.zvers[1]+plc.zvers[2]*plc.zvers[2]);
-  for (ir=0;ir<3;ir++)
-    plc.zvers[ir]/=mod;
-
-  /* here we define a system where zvers is the z-axis */
-  if (plc.zvers[2]==1.0)
-    {
-      /* if the zversor corresponds to the z axis use the existing axes */
-      plc.xvers[0]=1.0;
-      plc.xvers[1]=0.0;
-      plc.xvers[2]=0.0;
-      plc.yvers[0]=0.0;
-      plc.yvers[1]=1.0;
-      plc.yvers[2]=0.0;
-    }
-  else
-    {
-      /* x axis will be oriented as the cross product of zvers and the z axis */
-      mod=sqrt(plc.zvers[0]*plc.zvers[0]+plc.zvers[1]*plc.zvers[1]);
-      plc.xvers[0]= plc.zvers[1]/mod;
-      plc.xvers[1]=-plc.zvers[0]/mod;
-      plc.xvers[2]= 0.0;
-      /* y axis will be the cross product of z and x */
-      plc.yvers[0]=plc.zvers[1]*plc.xvers[2]-plc.zvers[2]*plc.xvers[1];
-      plc.yvers[1]=plc.zvers[2]*plc.xvers[0]-plc.zvers[0]*plc.xvers[2];
-      plc.yvers[2]=plc.zvers[0]*plc.xvers[1]-plc.zvers[1]*plc.xvers[0];
-    }
-
-  /* initialization to compute the number of realizations */
-  NAll=(int)(ComovingDistance(params.StartingzForPLC)/MyGrids[0].BoxSize)+2;
-  plc.Fstart = 1.+params.StartingzForPLC;
-  plc.Fstop  = 1.+params.LastzForPLC;
-
-  Largest_r=ComovingDistance(params.StartingzForPLC)/params.InterPartDist;
-  Smallest_r=ComovingDistance(params.LastzForPLC)/params.InterPartDist;
-
-  /* this is needed to compute the typical displacement */
-  displ_variance = sqrt( DisplVariance(params.InterPartDist) ) / params.InterPartDist;
-  Smallest_r -= NSAFE * GrowingMode(params.LastzForPLC,params.k_for_GM) * displ_variance;
-  Smallest_r = (Smallest_r>0 ? Smallest_r : 0.);
-  Largest_r += NSAFE * GrowingMode(params.StartingzForPLC,params.k_for_GM) * displ_variance;
-
-  l[0]=(double)(MyGrids[0].GSglobal[_x_]);
-  l[1]=(double)(MyGrids[0].GSglobal[_y_]);
-  l[2]=(double)(MyGrids[0].GSglobal[_z_]);
-
-  /* first, it counts the number of replications needed */
-  plc.Nreplications=0;
-  for (ir=-NAll; ir<=NAll; ir++)
-    for (jr=-NAll; jr<=NAll; jr++)
-      for (kr=-NAll; kr<=NAll; kr++)
-	{
-	  x[0]=ir*l[0];
-	  x[1]=jr*l[1];
-	  x[2]=kr*l[2];
-
-	  intersection = cone_and_cube_intersect(x, l, plc.center, plc.zvers, params.PLCAperture, &smallestr, &largestr, &axis);
-
-	  if (intersection && !(smallestr>Largest_r || largestr<Smallest_r))
-	    plc.Nreplications++;
-	}
-
-  /* second, it allocates the needed memory for the replications */
-  plc.repls=malloc(plc.Nreplications * sizeof(replication_data));
-
-  if (!ThisTask)
-    {
-      sprintf(filename,"pinocchio.%s.geometry.out",params.RunFlag);
-      fout=fopen(filename,"w");
-      fprintf(fout, "# N. replications: %d (out of %d checked)\n",plc.Nreplications,(2*NAll+1)*(2*NAll+1)*(2*NAll+1));
-      fprintf(fout, "# distance range: %10.6f %10.6f\n",Smallest_r,Largest_r);
-      fprintf(fout, "# V   = %10.6f %10.6f %10.6f\n",plc.center[0],plc.center[1],plc.center[2]);
-      fprintf(fout, "# D   = %10.6f %10.6f %10.6f\n",plc.zvers[0],plc.zvers[1],plc.zvers[2]);
-      fprintf(fout, "# L   = %10.6f %10.6f %10.6f\n",l[0],l[1],l[2]);
-      fprintf(fout, "# A   = %10.6f\n",params.PLCAperture);
-      fprintf(fout, "# IPD = %10.6f\n",params.InterPartDist);
-      fprintf(fout, "#\n");
-    }
-
-  /* third, it stores information on replications */
-  this=0;
-  for (ir=-NAll; ir<=NAll; ir++)
-    for (jr=-NAll; jr<=NAll; jr++)
-      for (kr=-NAll; kr<=NAll; kr++)
-	{
-	  x[0]=ir*l[0];
-	  x[1]=jr*l[1];
-	  x[2]=kr*l[2];
-
-	  intersection = cone_and_cube_intersect(x, l, plc.center, plc.zvers, params.PLCAperture, &smallestr, &largestr, &axis);
-
-	  if (intersection && !(smallestr>Largest_r || largestr<Smallest_r))
-	    {
-	      if (!ThisTask)
-		fprintf(fout," %3d  %3d %3d %3d   %10.6f %10.6f   %d  %d\n",this,ir,jr,kr,smallestr,largestr,intersection,axis);
-	      plc.repls[this].i=ir;
-	      plc.repls[this].j=jr;
-	      plc.repls[this].k=kr;
-	      plc.repls[this].F1=-largestr;
-	      plc.repls[this++].F2=-smallestr;
-	    }	  
-	}
-  if (!ThisTask)
-    fclose(fout);
-
-  /* fourth it transforms distances to redshifts */
-  for (z=100.; z>=0.0; z-=0.01)
-    {
-      /* NSAFE times the typical displacement at z */
-      tdis = NSAFE * GrowingMode(z,params.k_for_GM) * displ_variance;
-
-      /* comoving distance at redshift z */
-      d = ComovingDistance(z)/params.InterPartDist;
-      for (this=0; this<plc.Nreplications; this++)
-	{
-	  if (plc.repls[this].F1<=0.0 && d<-plc.repls[this].F1+tdis)
-	    plc.repls[this].F1=z+0.01+1.0;
-	  if (plc.repls[this].F2<=0.0 && d<-plc.repls[this].F2-tdis)
-	    plc.repls[this].F2=z+1.0;
-	}
-    }
-  for (this=0; this<plc.Nreplications; this++)
-    {
-      if (plc.repls[this].F1<=0.0)
-	plc.repls[this].F1=1.0;
-      if (plc.repls[this].F2<=0.0)
-	plc.repls[this].F2=1.0;
-    }
-
-  plc.Nmax = (int)(MyGrids[0].ParticlesPerTask/6 * params.PredPeakFactor);
-
-  /* n(z) for the light cone */
-  plc.delta_z=0.05;  /* NB: this is hard-coded... */
-  plc.nzbins=(int)((params.StartingzForPLC-params.LastzForPLC)/plc.delta_z+0.1);
-  plc.nz=(double*)calloc(plc.nzbins , sizeof(double));
-
-  if (!ThisTask)
-    {
-      printf("\nThe Past Light Cone will be reconstructed from z=%f to z=%f\n",
-	     params.StartingzForPLC,params.LastzForPLC);
-      if (params.PLCProvideConeData)
-	printf("Cone data have been provided in the parameter file\n");
-      else
-	printf("Cone data have been decided by the code\n");
-      printf("Past Light Cone will be centred on point [%f,%f,%f] (true Mpc)\n",
-	     plc.center[0]*params.InterPartDist,plc.center[1]*params.InterPartDist,plc.center[2]*params.InterPartDist);
-      printf("The cone vertex will be pointed toward [%f,%f,%f]\n",plc.zvers[0],plc.zvers[1],plc.zvers[2]);
-      printf("It will have an aperture of %f degrees\n",params.PLCAperture);
-#ifdef ROTATE_BOX
-      if (params.PLCProvideConeData)
-	printf("(NB: rotation has been applied to the provided coordinates)\n");
-#endif
-      printf("The comoving distance at the starting redshift, z=%f, is: %f Mpc\n",
-	     params.StartingzForPLC, Largest_r*params.InterPartDist);
-      printf("The comoving distance at the stopping redshift, z=%f, is: %f Mpc\n",
-	     params.LastzForPLC, Smallest_r*params.InterPartDist);
-      printf("The reconstruction will be done for %f < z < %f\n",params.LastzForPLC,params.StartingzForPLC);
-      printf("The corresponding F values are: Fstart=%f, Fstop=%f\n",plc.Fstart,plc.Fstop);
-      printf("The box will be replicated %d times to construct the PLC\n",plc.Nreplications);
-      for (ic=0; ic<plc.Nreplications; ic++)
-	printf("   Replication %2d: shift (%2d,%2d,%2d), from F=%f to F=%f\n",
-	       ic,plc.repls[ic].i,plc.repls[ic].j,plc.repls[ic].k,
-	       plc.repls[ic].F1,plc.repls[ic].F2);
-      printf("Task 0 will use plc.Nmax=%d\n",plc.Nmax);
-      printf("The halo number density will be output in %d redshift bins\n",plc.nzbins);
-      printf("\n");
-    }
-
-
-  return 0;
-
-}
-
-
-double maxF(double *P, double *V, double *U, double *D, double *L)
-{
-  /* determines the smallest angle between a segment and a cone direction;
-     the cone vertex is in a point vec(V), its direction is versor(D);
-     the segment starts from point vec(P) and goes along the direction versor(U), for a length L;
-     the code returns the cos of the smallest angle between the cone axis and
-     the line that joins vec(V) with a point of the segment.
-  */
-
-  double dP=sqrt((P[0]-V[0])*(P[0]-V[0])+(P[1]-V[1])*(P[1]-V[1])+(P[2]-V[2])*(P[2]-V[2]));
-  if (dP==0.0)
-    return 1.0;
-  double cosDU=(D[0]*U[0]+D[1]*U[1]+D[2]*U[2]);
-  double cosDP=(D[0]*(P[0]-V[0])+D[1]*(P[1]-V[1])+D[2]*(P[2]-V[2]))/dP;
-  double cosUP=(U[0]*(P[0]-V[0])+U[1]*(P[1]-V[1])+U[2]*(P[2]-V[2]))/dP;
-
-  if (cosDP-cosDU*cosUP==0.0)
-    return 0.0;
-  double tmax=(cosDU-cosDP*cosUP)/(cosDP-cosDU*cosUP);
-  if (tmax<0)
-    tmax=0.0;
-  else if (tmax>*L/dP)
-    tmax=*L/dP;
-
-  return (cosDP+tmax*cosDU)/sqrt(1.0+tmax*tmax+2.*tmax*cosUP);
-}
-
-int cone_and_cube_intersect(double *Oc, double *L, double *V, double *D, double theta, double *rmin, double *rmax, int *axis)
-{
-  int i, j, k, ivec[3], dim, dim1, dim2;
-  double r, x, F, Fmax, costh, proj, U[3], P[3];
-
-  /* This routine returns >=1 if the cone with vertex V, axis
-     direction D and semi-aperture theta (deg) intersects the cube
-     (parallelepiped) starting from point Oc and with edges of lenght
-     L aligned with the axes.  It returns 0 if the two solids do not
-     intersect.  It also computes the smallest and largest distances
-     of the cube from the cone vertex V. The bits of the integer axis
-     will encode the cube faces that are intersected by the cone axis.
-   */
-
-
-  /* Initialization of rmin and rmax */
-  *rmin=1.e32;
-  *rmax=0.0;
-
-  /* max distance is computed using the cube vertices */
-  for (i=0;i<2;i++)
-    for (j=0;j<2;j++)
-      for (k=0;k<2;k++)
-	{
-	  r = sqrt(pow(Oc[0]+i*L[0]-V[0],2.0) +
-		   pow(Oc[1]+j*L[1]-V[1],2.0) +
-		   pow(Oc[2]+k*L[2]-V[2],2.0));
-	  if (r>*rmax)
-	    *rmax=r;
-	}
-
-
-  /* min distance from cube faces */
-  /* and intersection of axis with cube faces */  
-  *axis=0;
-  for (dim=0; dim<3; dim++)  /* three dimension (normals to cube faces) */
-    for (i=0; i<2; i++)      /* two faces per dimension */
-      {
-	proj=Oc[dim]-V[dim]+i*L[dim];
-	dim1=(dim+1)%3;
-	dim2=(dim+2)%3;
-	
-	/* minimum distance */
-	r=proj*proj;                        /* the normal component always contributes */
-	if (V[dim1]<Oc[dim1])               /* only of their projection is outside the face */
-	  r+=pow(V[dim1]-Oc[dim1],2.0);
-	else if (V[dim1]>=Oc[dim1]+L[dim1])
-	  r+=pow(V[dim1]-Oc[dim1]-L[dim1],2.0);
-	if (V[dim2]<Oc[dim2])
-	  r+=pow(V[dim2]-Oc[dim2],2.0);
-	else if (V[dim2]>=Oc[dim2]+L[dim2])
-	  r+=pow(V[dim2]-Oc[dim2]-L[dim2],2.0);
-	r=sqrt(r);
-	if (r<*rmin)
-	  *rmin=r;
-
-	/* axis intersection */
-	if ( (x=proj/D[dim]) > 0.0 &&
-	     V[dim1] + x*D[dim1] >= Oc[dim1] &&
-	     V[dim1] + x*D[dim1] < Oc[dim1] + L[dim1] &&
-	     V[dim2] + x*D[dim2] >= Oc[dim2] &&
-	     V[dim2] + x*D[dim2] < Oc[dim2] + L[dim2] )
-	  *axis+=1<<(dim+i*3);
-      }
-
-  /* step 1: if the vertex V is inside the cube then they intersect */
-  if (( V[0]>=Oc[0] && V[0]<Oc[0]+L[0] &&
-	V[1]>=Oc[1] && V[1]<Oc[1]+L[1] &&
-	V[2]>=Oc[2] && V[2]<Oc[2]+L[2] ) )
-    {
-      *rmin = 0.0;  /* in this case rmin is unrelated to the cube boundary */
-      return 1;
-    }
-
-  /* step 2: if the whole sky is required, only rmin and rmax are needed */
-  if (theta>=180.)
-      return 2;
-
-  /* step 3: if the axis intersects one face then there is an intersection */
-  if (*axis)
-    return 3;
-
-  /* step4: compute maximum of ** F = (P-V) dot D /|P-V| - cos theta ** 
-     for each cube edge */
-  Fmax=-10.0;
-  costh = cos( theta / 180. * PI );
-  for (i=0;i<2;i++)
-    for (j=0;j<2;j++)
-      for (k=0;k<2;k++)
-	{
-	  ivec[0]=i;
-	  ivec[1]=j;
-	  ivec[2]=k;
-	  
-	  for (dim=0;dim<3;dim++)
-	    if (!ivec[dim])
-	      {
-		U[dim]=1.0;
-		U[(dim+1)%3]=0.0;
-		U[(dim+2)%3]=0.0;
-		P[0]=Oc[0]+ivec[0]*L[0];
-		P[1]=Oc[1]+ivec[1]*L[1];
-		P[2]=Oc[2]+ivec[2]*L[2];
-		F=maxF(P, V, U, D, L+dim)-costh;
-		if (F>Fmax)
-		  Fmax=F;
-	      }
-	}
-
-  /* if the nearest vertex is inside the cone then exit */
-  if (Fmax>0)
-    return 4;
-
-  /* at this point the cone and the cube do not intersect */
-  return 0;
-
-}
-
-#else
-
 int set_plc()
 {
   if (!ThisTask)
@@ -857,8 +459,6 @@ int set_plc()
 
   return 0;
 }
-
-#endif
 
 /* division in sub-boxes */
 int set_subboxes()
@@ -1315,49 +915,12 @@ int set_fft_decomposition(void)
 
 int check_parameters_and_directives(void)
 {
-  
-
-#ifndef SNAPSHOT
   if (params.WriteTimelessSnapshot || params.WriteDensity)
     {
       if (!ThisTask)
-	printf("ERROR: to produce a snapshot you have to compile with SNAPSHOT directive\n");
+	printf("ERROR: to produce a snapshot you have to compile with SNAPSHOT (DEPRECATED) directive\n");
       return 1;
     }
-#endif
-
-#ifdef SNAPSHOT
-
-  static unsigned long long largest32 = (unsigned)1<<31;
-
-#ifndef LONGIDS
-  if ((params.WriteTimelessSnapshot || params.WriteDensity) && MyGrids[0].Ntotal > largest32)
-    {
-      if (!ThisTask)
-	printf("ERROR: with these many particles you need to compile with LONGIDS directive\n  otherwise the snapshot IDs will be unreadable\n");
-      return 1;
-    }
-#endif
-
-  if (params.WriteTimelessSnapshot)
-    {
-      unsigned long long BlockLength = MyGrids[0].Ntotal * 12 / (unsigned long long)params.NumFiles;
-      if (BlockLength > largest32)
-	{
-	  unsigned int NumFiles = (int)(MyGrids[0].Ntotal * 12 / largest32);
-	  if ((unsigned long long)(NumFiles * 12) * largest32 < MyGrids[0].Ntotal)
-	    ++NumFiles;
-
-	  if (!ThisTask)
-	    {
-	      printf("ERROR: you need to write such a large snapshot with at least NumFiles=%d\n",NumFiles);
-	    }
-	  return 1;
-	}
-    }
-#endif
-
-
   return 0;
 }
 
@@ -1369,9 +932,6 @@ void greetings(void)
   if (!ThisTask)
     {
       printf("[%s] This is pinocchio V5.0, running on %d MPI tasks\n\n",fdate(),NTasks);
-#ifdef _OPENMP
-      printf( "Using %d OpenMP threads\n", internal.nthreads_omp );
-#endif
 
 #ifdef TWO_LPT
 #ifndef THREE_LPT
@@ -1391,21 +951,7 @@ void greetings(void)
       printf("Catalogs will be written in the light version\n");
 #endif
 
-#ifdef TABULATED_CT
-#ifdef ELL_CLASSIC
-      printf("Ellipsoidal collapse will be tabulated as Monaco (1995)\n");
-#endif
-#ifdef ELL_SNG
-      printf("Numerical integration of ellipsoidal collapse will be tabulated\n");
-#endif
-#else
       printf("Ellipsoidal collapse will be computed as Monaco (1995)\n");
-#endif
-
-#ifdef WHITENOISE
-#error WHITENOISE is not implemented yet
-      printf("Initial conditions will be read from a white noise file\n");
-#endif
 
 #ifdef NO_RANDOM_MODULES
       printf("Initial conditions will be generated with non-random modules of the Fourier modes\n");

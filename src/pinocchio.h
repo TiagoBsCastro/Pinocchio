@@ -87,15 +87,6 @@
 #define ELL_CLASSIC
 #endif
 
-#if defined(READ_PK_TABLE) && defined(MOD_GRAV_FR)
-#error REAK_PK_TABLE and MOD_GRAV_FR cannot be chosen together
-#endif
-
-#if defined(MOD_GRAV_FR) && !defined(FR0)
-#error Please set a value to FR0 when you choose MOD_GRAV_FR
-#endif
-
-
 /* vectorialization */
 #define DVEC_SIZE 4
 
@@ -160,11 +151,6 @@ typedef struct  // RIALLINEARE?
 #ifdef THREE_LPT
   PRODFLOAT Vel_3LPT_1[3],Vel_3LPT_2[3];
 #endif
-#endif
-
-#ifdef SNAPSHOT
-  PRODFLOAT zacc;
-  int group_ID;
 #endif
 
 #ifdef RECOMPUTE_DISPLACEMENTS
@@ -232,15 +218,6 @@ extern grid_data *MyGrids;
 extern pfft_complex **cvector_fft;
 extern double **rvector_fft;
 
-#ifdef READ_PK_TABLE
-typedef struct
-{
-  int Nkbins, NCAMB;
-  char MatterFile[SBLENGTH], TransferFile[SBLENGTH], RunName[SBLENGTH], RedshiftsFile[LBLENGTH];
-  double *Logk, *LogPkref, D2ref, *Scalef, *RefGM;
-} camb_data;
-#endif
-
 typedef struct
 {
   double Omega0, OmegaLambda, Hubble100, Sigma8, OmegaBaryon, DEw0, DEwa, 
@@ -255,9 +232,6 @@ typedef struct
     OutputInH100, RandomSeed, MaxMem, NumFiles, 
     BoxInH100, simpleLambda, AnalyticMassFunction, MinHaloMass, PLCProvideConeData, ExitIfExtraParticles,
     use_transposed_fft, use_inplace_fft;
-#ifdef READ_PK_TABLE
-  camb_data camb;
-#endif
 } param_data;
 extern param_data params;
 
@@ -289,9 +263,6 @@ typedef struct
 {
   double init,total, dens, fft, coll, invcoll, ell, vel, lpt, fmax, distr, sort, group, frag, io,
     deriv, mem_transf, partial, set_subboxes, set_plc, memory_allocation, fft_initialization
-#ifdef PLC
-    ,plc
-#endif  
     ;
 } cputime_data;
 extern cputime_data cputime;
@@ -321,39 +292,8 @@ typedef struct
   PRODFLOAT t_appear, t_peak, t_merge;
   unsigned long long int name;
   int trackT,trackC;
-#ifdef PLC
-  PRODFLOAT Flast;
-#endif
 } group_data;
 extern group_data *groups;
-
-#ifdef PLC
-typedef struct
-{
-  int i,j,k;
-  PRODFLOAT F1,F2;
-} replication_data;
-
-typedef struct
-{
-  int Nreplications, Nmax, Nstored, Nstored_last, Nhalotot;
-  double Nexpected;
-  double Fstart,Fstop,center[3];
-  double xvers[3],yvers[3],zvers[3];
-  replication_data *repls;
-  int nzbins;
-  double delta_z,*nz;
-} plc_data;
-extern plc_data plc;
-
-typedef struct
-{
-  int Mass;
-  unsigned long long int name;
-  PRODFLOAT z,x[3],v[3]; //,rhor,theta,phi;
-} plcgroup_data;
-extern plcgroup_data *plcgroups;
-#endif
 
 extern char date_string[25];
 
@@ -391,10 +331,6 @@ extern mf_data mf;
 // Declarations for the variables
 extern gsl_spline **SPLINE;
 extern gsl_interp_accel **ACCEL;
-
-#ifdef MOD_GRAV_FR
-extern double H_over_c;
-#endif
 
 typedef struct
 {
@@ -461,11 +397,6 @@ extern Segment_data Segment;
 /* prototypes for functions defined in collapse_times.c */
 int compute_collapse_times(int);
 
-#ifdef TABULATED_CT
-int initialize_collapse_times(int, int);
-int reset_collapse_times(int);
-#endif
-
 /* prototypes for functions defined in fmax-fftw.c */
 int set_one_grid(int);
 int compute_fft_plans();
@@ -505,13 +436,6 @@ int set_subboxes(void);
 int set_smoothing(void);
 void greetings(void);
 int check_parameters_and_directives(void);
-
-/* prototypes in write_snapshot.c */
-#ifdef SNAPSHOT
-int write_density(int);
-int write_LPT_snapshot(double);
-int write_timeless_snapshot(void);
-#endif
 
 /* prototypes for functions defined in cosmo.c */
 int initialize_cosmology();
@@ -579,12 +503,6 @@ int build_groups(int,double,int);
 int quick_build_groups(int);
 int update_map(unsigned int *);
 
-// RIMETTERE LA LETTURA DEL WHITE NOISE
-//#ifdef WHITENOISE
-//int read_white_noise(void);
-//#endif
-
-
 /* fragmentation prototypes */
 void condition_for_accretion(int, int, int, int, int, PRODFLOAT, int, double *, double *); // LEVARE primo argomento
 void condition_for_merging(PRODFLOAT, int, int, int *);
@@ -602,14 +520,6 @@ void update_history(int, int, PRODFLOAT);
 void accretion(int, int, int, int, int, PRODFLOAT);
 void update(pos_data *, pos_data *);
 int write_catalog(int);
-#ifdef ONLYFORFIRSTBHS
-int write_histories(int);
-#else
 int write_histories(void);
-#endif
 int compute_mf(int);
 int find_location(int, int, int);
-#ifdef PLC
-int write_PLC();
-void coord_transformation_cartesian_polar(PRODFLOAT *, double *, double *, double *);
-#endif

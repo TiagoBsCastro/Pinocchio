@@ -223,30 +223,6 @@ int read_parameter_file()
       addr[nt] = &params.ExitIfExtraParticles;
       id[nt++] = LOGICAL;
 
-#ifdef READ_PK_TABLE
-      strcpy(tag[nt], "CAMBMatterFileTag");
-      addr[nt] = params.camb.MatterFile;
-      id[nt++] = STRING;
-
-      strcpy(tag[nt], "CAMBTransferFileTag");
-      addr[nt] = params.camb.TransferFile;
-      id[nt++] = STRING;
-
-      strcpy(tag[nt], "CAMBRunName");
-      addr[nt] = params.camb.RunName;
-      id[nt++] = STRING;
-
-      strcpy(tag[nt], "CAMBRedsfhitsFile");
-      addr[nt] = params.camb.RedshiftsFile;
-      id[nt++] = STRING;
-#endif
-
-#ifdef TABULATED_CT
-      strcpy(tag[nt], "CTtableFile");
-      addr[nt] = params.CTtableFile;
-      id[nt++] = STRING;
-#endif
-
       strcpy(tag[nt], "UseTransposedFFT");
       addr[nt] = &(params.use_transposed_fft);
       id[nt++] = LOGICAL;

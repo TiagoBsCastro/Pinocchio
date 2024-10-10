@@ -57,10 +57,6 @@ double DE_EquationOfState(double);
 double IntegrandComovingDistance(double, void*);
 double ComputeMassVariance(double);
 double ComputeDisplVariance(double);
-#ifdef READ_PK_TABLE
-int read_Pk_table_from_CAMB(double *, double *, double *, double *, double *, double *, double *, double *, double *);
-#endif
-
 
 /**************************/
 /* INITIALIZATION SECTION */
@@ -86,9 +82,6 @@ int initialize_cosmology()
 
   gsl_function Function_cosmo;
   
-#ifdef MOD_GRAV_FR
-  H_over_c = 100. / SPEEDOFLIGHT;
-#endif
   OmegaRad = OMEGARAD_H2 / params.Hubble100 / params.Hubble100;
   OmegaK = 1.0-params.Omega0 - params.OmegaLambda - OmegaRad;
   SqrtOmegaK = sqrt(fabs(OmegaK));
@@ -159,9 +152,6 @@ int initialize_cosmology()
   fomega31  = (double*)malloc(NBINS * NkBINS * sizeof(double));
   fomega32  = (double*)malloc(NBINS * NkBINS * sizeof(double));
 
-#ifdef READ_PK_TABLE
-  if (WhichSpectrum!=5)
-#endif
     {
 
       /* Runge-Kutta integration of cosmic time and growth rate */
@@ -277,82 +267,6 @@ int initialize_cosmology()
     }
 
     }
-#ifdef READ_PK_TABLE
-  else
-    {
-      if (!ThisTask)
-	printf("Only the cosmic time is integrated, the growth rate is read from CAMB files\n");
-
-      /* in this case the integration is limited only to the cosmic time */
-      const gsl_odeiv2_step_type *T = gsl_odeiv2_step_rkf45;
-      gsl_odeiv2_step *ode_s = gsl_odeiv2_step_alloc(T,1);
-      gsl_odeiv2_control *ode_c = gsl_odeiv2_control_standard_new(1.0e-8, 1.0e-8, 1.0, 1.0);
-      gsl_odeiv2_evolve *ode_e = gsl_odeiv2_evolve_alloc(1);
-      gsl_odeiv2_system ode_sys = {system_of_ODEs_small, jac, 1, (void*)&ode_param};
-
-      /* ICs for the runge-kutta integration of the cosmic time only */
-      x1   = pow(10., log_amin -2.);   /*  initial value of scale factor a */
-      y[0] = 2. / 3. * pow(x1, 1.5);   /*  initial value of t(a)*Hubble0   */
-      hh=x1/10.;                       /*  initial guess of time-step */
-
-      /* this function will be integrated within the loop */
-      Function_cosmo.function = &IntegrandComovingDistance;
-
-      /***********************************************/
-      /* ODE integration of time-dependent functions */
-      /***********************************************/
-      for (i=0, Today=0; i<NBINS; i++)
-	{
-	  x2=pow(10., log_amin + i*dloga);
-	  if (fabs(log_amin + i*dloga)<dloga/10.)
-	    x2=1.0;
-
-	  /* integration of ODE system */
-	  while (x1<x2 && status==GSL_SUCCESS)
-	    {
-	      status=gsl_odeiv2_evolve_apply(ode_e, ode_c, ode_s, &ode_sys, &x1, x2, &hh, y);
-	      if (status!=GSL_SUCCESS)
-		{
-		  printf("ERROR on task %d: integration of cosmological quantities failed\n",ThisTask);
-		  fflush(stdout);
-		  return 1;
-		}
-	    }
-
-	  scalef[i]   = x2;
-	  cosmtime[i] = log10(y[0]*HUBBLETIME_GYR/params.Hubble100);
-	  if (!Today && x2>=1.)
-	    Today=i;
-
-	  /* calculation of comoving distance (Mpc) for a generic cosmology (i.e. flat, open or closed) 
-	     and generic equation of state for the DE component  */
-	  if (i<NBINS-NBB)
-	    {
-	      gsl_integration_qags(&Function_cosmo, 0.0, 1./x2-1., 0.0, TOLERANCE, NWINT, workspace, &result, &error);
-	      comvdist[i] = SPEEDOFLIGHT*result;
-	      if (fabs(OmegaK) < 1.e-4)
-		diamdist[i] = x2 * comvdist[i];
-	      else if (OmegaK <0)
-		{
-		  R0 = SPEEDOFLIGHT/params.Hubble100/100. / SqrtOmegaK;
-		  diamdist[i] = x2 * R0 * sin(comvdist[i]/R0);
-		}
-	      else
-		{
-		  R0 = SPEEDOFLIGHT/params.Hubble100/100. / SqrtOmegaK;
-		  diamdist[i] = x2 * R0 * sinh(comvdist[i]/R0);
-		}
-	    }
-
-	  /* closing the loop on integrations */
-	  x1=x2;
-	}
-
-      /* the growth rates are set by reading the CAMB power spectra */
-      if (read_Pk_table_from_CAMB(scalef, grow1, grow2, grow31, grow32, fomega1, fomega2, fomega31, fomega32))
-	return 1;
-    }
-#endif
 
   /* these quantities will be interpolated logarithmically */
   for (i=0; i<NBINS; i++)
@@ -527,9 +441,6 @@ int system_of_ODEs(double x, const double y[], double *dydx, void *param)
   /* cosmic time */
   dydx[0] = 1.0/x/sqrt(Esq);
 
-
-#if !defined(MOD_GRAV_FR) && !defined(FOMEGA_GAMMA)
-
   /* this is the standard integration */
   for (int j=0; j<NkBINS; j++)
     {
@@ -544,64 +455,6 @@ int system_of_ODEs(double x, const double y[], double *dydx, void *param)
       dydx[8+j*8] = y[7+j*8];                                            /* d D32/ dt */
     }
   return GSL_SUCCESS;
-#endif
-
-
-#ifdef FOMEGA_GAMMA
-
-  /* this is a toy model: D(t) is the one obtained by forcing 
-     the gamma RSD parameter to a certain value. 
-     Higher orders are obtained with Bouchet's fits */
-  dydx[1] = 0.;
-  dydx[2] =  (pow(params.Omega0/pow(x,3.0)/Esq,FOMEGA_GAMMA))/x * y[1];
-
-  for (i=3; i<9; i++)
-    dydx[i]=0.;
-
-  return GSL_SUCCESS;
-#endif
-
-
-#ifdef MOD_GRAV_FR
-
-  /* integration of growth rates in f(R) */
-  /* equations for D2(k,a) as in Moretti et al. (2019) */
-
-  double B1,B2,kkk,PI1,PI2,M2;
-  B1  = params.Omega0 + 4. * params.OmegaLambda;
-  B2  = params.Omega0 / pow(x, 3.) + 4. * params.OmegaLambda;
-
-  for (int ik=0; ik<NkBINS; ik++)
-    {
-      if (!ik)
-	kkk=0.0;
-      else
-	kkk = pow(10., LOGKMIN + ik*DELTALOGK);
-      PI1 = kkk * kkk / x / x      + 0.5 * H_over_c * H_over_c * pow(B2, 3.) / (B1 * B1 * FR0);
-      PI2 = kkk * kkk / x / x / 2. + 0.5 * H_over_c * H_over_c + pow(B2, 3.) / (B1 * B1 * FR0);
-      M2  = params.Omega0 * H_over_c * H_over_c * kkk * kkk 
-	* (1.5 * H_over_c / FR0) * (1.5 * H_over_c / FR0)
-	* pow(B2, 5.) / pow(B1, 4.) / (9. * pow(x, 5.));
-      
-      dydx[1 + 8*ik] = a1 * y[1 + 8*ik] + mu(x, kkk) * b1 * y[2 + 8*ik];
-      dydx[2 + 8*ik] = y[1 + 8*ik];
-      dydx[3 + 8*ik] = a1 * y[3 + 8*ik] + mu(x, kkk) * b1 * y[4 + 8*ik]
-	- (mu(x, kkk) - M2 / PI1 / PI2 / PI2) * b1 * y[2 + 8*ik] * y[2 + 8*ik] ; 
-      dydx[4 + 8*ik] = y[3 + 8*ik];
-      
-      /* third-order growth is not used, it is set to the LCDM one */
-      dydx[5 + 8*ik] = a1*y[5 + 8*ik] + b1*y[6 + 8*ik]
-	- 2.*b1*y[2 + 8*ik]*y[2 + 8*ik]*y[2 + 8*ik];              /* d^2 D31/ dt^2 */
-      dydx[6 + 8*ik] = y[5 + 8*ik];                               /* d D31/ dt */
-      dydx[7 + 8*ik] = a1*y[7 + 8*ik] + b1*y[8 + 8*ik] 
-	- 2.*b1*y[2 + 8*ik]*y[4 + 8*ik] 
-	+ 2.*b1*y[2 + 8*ik]*y[2 + 8*ik]*y[2 + 8*ik];              /* d^2 D32/ dt^2 */
-      dydx[8 + 8*ik] = y[7 + 8*ik];                               /* d D32/ dt */
-
-    }
-
-  return GSL_SUCCESS;
-#endif
 
   return GSL_FAILURE;
 }
@@ -758,8 +611,6 @@ double PowerSpec_PowerLaw(double);
 double transf_EH(double);
 double T0(double,double,double);
 
-//#define BODE_ET_AL_A9
-
 double PowerSpectrum(double k)
 {
   /* input: k (1/Mpc) */
@@ -796,14 +647,6 @@ double PowerSpectrum(double k)
 
   if(params.WDM_PartMass_in_kev > 0.)
     {
-#ifdef BODE_ET_AL_A9
-      /* Eqn. (A9) in Bode, Ostriker & Turok (2001), assuming gX=1.5  */
-      /* NB: this is a length in Mpc/h*/
-      alpha =
-	0.048 * pow((params.Omega0 - params.OmegaBaryon) / 0.4, 0.15)
-	* pow(params.Hubble100 / 0.65, 1.3) * pow(1.0 / params.WDM_PartMass_in_kev, 1.15);
-      Tf = pow(1 + pow(alpha * k / params.Hubble100 * (3.085678e24 / UnitLength_in_cm), 2 * 1.2), -5.0 / 1.2);
-#else
       /* Eqn. just after (A7) in Bode, Ostriker & Turok (2001), assuming gX=1.5  */
       /* NB: this is a length in Mpc/h*/
       alpha =
@@ -811,7 +654,7 @@ double PowerSpectrum(double k)
 	* pow(params.Hubble100 / 0.65, 1.3) * pow(1.0 / params.WDM_PartMass_in_kev, 1.15);
 
       Tf = pow(1 + pow(alpha * k / params.Hubble100 * (3.085678e24 / UnitLength_in_cm), 2), -5.0);
-#endif
+
       power *= Tf * Tf;
     }
 
@@ -997,338 +840,6 @@ int read_Pk_from_file(void)
 
   return 0;
 }
-
-#ifdef READ_PK_TABLE
-int read_Pk_table_from_CAMB(double *scalef, double *grow1, double *grow2, double *grow31, double *grow32, double *fomega1, double *fomega2, double *fomega31, double *fomega32)
-{
-  /* this routine reads P(k) at various redshifts from a series of CAMB outputs 
-     and stores them in the splines/vectors for Pk (at the reference time)
-     and for the growth rates
-  */
-
-  double *logk, *Pk, *CAMBScalefac, *lingrow;
-  char    filename[LBLENGTH],buffer[LBLENGTH],*ugo;
-  FILE   *fd;
-  
-#ifdef ONLY_MATTER_POWER
-  gsl_spline       *splineTransf=0x0;
-  gsl_interp_accel *accel=0x0;
-  double           *Ktransf,*Ttransf,Tcdm,Ttot,Tbar;
-  int               Nktransf;
-  
-  FILE             *fd2;
-#endif
-
-  if (!ThisTask)
-    {
-      /* counts the number of CAMB files */
-      params.camb.NCAMB=0;
-      sprintf(filename,"%s_%s_%03d.dat",params.camb.RunName,params.camb.MatterFile,params.camb.NCAMB);
-      while ((fd=fopen(filename,"r"))!=0x0)
-	{
-	  if (!params.camb.NCAMB)
-	    /* if this is the first opened file, count the number of data lines */
-	    {
-	      NPowerTable=0;
-	      while(!feof(fd))
-		{
-		  ugo=fgets(buffer,LBLENGTH,fd);
-		  int i = sscanf(buffer,"%*lf");
-		  if (i && ugo!=0x0)
-		    NPowerTable++;
-		}
-	    }
-
-#ifdef ONLY_MATTER_POWER
-	  /* checks that the transfer file exists */
-	  sprintf(filename,"%s_%s_000.dat",params.camb.RunName,params.camb.TransferFile);
-	  if ((fd2=fopen(filename,"r"))!=0x0)
-	    {
-	      if (!params.camb.NCAMB)
-		/* if this is the first opened file, count the number of data lines */
-		{
-		  Nktransf=0;
-		  while(!feof(fd2))
-		    {
-		      ugo=fgets(buffer,LBLENGTH,fd2);
-		      int i = sscanf(buffer,"%*lf");
-		      if (i && ugo!=0x0)
-			Nktransf++;
-		    }
-		}
-	      fclose(fd2);
-	    }
-	  else
-	    {
-	      printf("Error on Task 0: CAMB transfer file %s not found\n",filename);
-	      return 1;
-	    }
-#endif
-
-	  fclose(fd);
-	  params.camb.NCAMB++;
-	  sprintf(filename,"%s_%s_%03d.dat",params.camb.RunName,params.camb.MatterFile,params.camb.NCAMB);
-	}
-     
-      /* various checks */
-      if (!params.camb.NCAMB)
-	{
-	  printf("Error on Task 0: CAMB file %s not found\n",filename);
-	  return 1;
-	}
-      else if (!NPowerTable)
-	{
-	  sprintf(filename,"%s_%s_%03d.dat",params.camb.RunName,params.camb.MatterFile,0);
-	  printf("Error on Task 0: problem in reading CAMB file %s\n",filename);
-	  return 1;
-	}
-#ifdef ONLY_MATTER_POWER
-      else if (!Nktransf)
-	{
-	  printf("Error on Task 0: no lines found in transfer function file\n");
-	  return 1;
-	}
-#endif
-
-      printf("Found %d CAMB matter power files with %d lines each\n",params.camb.NCAMB,NPowerTable);
-#ifdef ONLY_MATTER_POWER
-      printf("Number of data lines in transfer function file: %d\n",Nktransf);
-#endif
-    }
-  /* Task 0 broadcasts NCAMB and Nkbins */
-
-  MPI_Bcast(&params.camb.NCAMB,  sizeof(int), MPI_BYTE, 0, MPI_COMM_WORLD);
-  MPI_Bcast(&NPowerTable,        sizeof(int), MPI_BYTE, 0, MPI_COMM_WORLD);
-#ifdef ONLY_MATTER_POWER
-  MPI_Bcast(&Nktransf,           sizeof(int), MPI_BYTE, 0, MPI_COMM_WORLD);
-#endif
-
-  /* allocates the needed memory for the power spectra */
-  SPLINE[SP_PK] = gsl_spline_alloc(gsl_interp_cspline, NPowerTable);
-  logk          = (double*)malloc(NPowerTable * sizeof(double));
-  Pk            = (double*)malloc(NPowerTable * sizeof(double));
-
-  /* allocates needed memory for the growth rates */
-  CAMBScalefac  = (double*)malloc(params.camb.NCAMB * sizeof(double));
-  lingrow       = (double*)malloc(params.camb.NCAMB * NPowerTable * sizeof(double));
-
-  if (!ThisTask)
-    {
-      /* redshift file */
-      if ((fd=fopen(params.camb.RedshiftsFile,"r"))==0x0)
-	{
-	  printf("Error: Redshift file %s not found\n",params.camb.RedshiftsFile);
-	  return 1;
-	}
-      for (int i = 0; i < params.camb.NCAMB; i++)
-	fscanf(fd,"%d %lf",&dummy,CAMBScalefac+i);
-      fclose(fd);
-
-      /* The last redshift MUST be z=0 */ 
-      if (CAMBScalefac[params.camb.NCAMB-1]!=0.0)
-	{
-	  printf("ERROR on Task 0: last CAMB redshift must be 0.0\n");
-	  return 1;
-	}
-
-      /* transforms them into scale factors*/
-      for (int i = 0; i < params.camb.NCAMB; i++)
-	CAMBScalefac[i]=1./(1.+CAMBScalefac[i]);
-
-#ifdef ONLY_MATTER_POWER
-      /* Task 0 reads all the CAMB files and stores the linear growth rate */
-      accel = gsl_interp_accel_alloc();
-      splineTransf = gsl_spline_alloc(gsl_interp_cspline, Nktransf);
-      Ktransf = (double*)malloc(Nktransf*sizeof(double));
-      Ttransf = (double*)malloc(Nktransf*sizeof(double));
-#endif
-
-      /* This loop starts from the last output, the one at z=0 that is stored in P(k) */
-      for (int i = params.camb. NCAMB-1; i >= 0; i--)
-	{
-#ifdef ONLY_MATTER_POWER
-	  /* reads the transfer function and initializes the spline */
-	  sprintf(filename,"%s_%s_%03d.dat",params.camb.RunName,params.camb.TransferFile,i);
-	  fd=fopen(filename,"r");
-	  for (int j = 0; j < Nktransf; j++ )
-	    {
-	      ugo=fgets(buffer,LBLENGTH,fd);
-	      double kappa;
-	      sscanf(buffer,"%lf %lf %lf %*f %*f %*f %lf", &kappa, &Tcdm, &Tbar, &Ttot);
-	      Ktransf[j]=log10(kappa);
-#ifdef NOBARYONS
-	      Ttransf[j]=2.*log10(Tcdm/Ttot);
-#else
-	      Ttransf[j]=2.*log10(((params.Omega0-params.OmegaBaryon)*Tcdm+params.OmegaBaryon*Tbar)/(params.Omega0)/Ttot);
-#endif
-	    }
-	  gsl_spline_init(splineTransf, Ktransf, Ttransf, Nktransf);
-	  fclose(fd);
-#endif
-
-	  /* reads the power spectrum and initializes the spline */
-	  sprintf(filename,"%s_%s_%03d.dat",params.camb.RunName,params.camb.MatterFile,i);
-	  fd=fopen(filename,"r");
-	  for (int j = 0; j < NPowerTable; j++ )
-	    {
-	      double kappa, myPk;
-	      fscanf(fd,"%lf %lf", &kappa, &myPk);
-
-#ifdef ONLY_MATTER_POWER
-	      /* here it corrects the power spectrum by the square of the ratio 
-		 of the matter and total transfer functions */
-	      myPk *= pow(10.,my_spline_eval(splineTransf, log10(kappa), accel));
-#endif
-	      int i;
-	      if ( i == params.camb.NCAMB-1)
-		{
-		  Pk[j]   = log10(kappa*kappa*kappa*myPk);
-		  logk[j] = log10(kappa*params.Hubble100);
-		  if (params.InputSpectrum_UnitLength_in_cm != 0)
-		    logk[j] += log10(params.InputSpectrum_UnitLength_in_cm/UnitLength_in_cm);
-		  lingrow[i+j*params.camb.NCAMB] = 0;
-		}
-	      else
-		lingrow[i+j*params.camb.NCAMB] = 0.5* (log10(kappa*kappa*kappa*myPk) - Pk[j]);
-
-	    }
-	  fclose(fd);
-	}
-
-      if (logk[0]>LOGKMIN || logk[NPowerTable-1]<LOGKMIN+DELTALOGK*(NkBINS-1))
-	{
-	  printf("ERROR: CAMB P(k) tables run from k=%10g to k=%10g 1/Mpc\n",
-		 pow(10.,logk[0]), pow(10.,logk[NPowerTable-1]));
-	  printf("       while the growth rate is requested from k=%10g to k=%10g 1/Mpc\n",
-		 pow(10.,LOGKMIN), pow(10.,LOGKMIN+DELTALOGK*(NkBINS-1)));
-	  printf("       please extend the k range in CAMB or fix LOGKMIN, DELTALOGK and NkBINS in def_splines.h\n");
-	  return 1;
-	}
-
-#ifdef ONLY_MATTER_POWER
-      free(Ttransf);
-      free(Ktransf);
-      gsl_spline_free(splineTransf);
-      gsl_interp_accel_free(accel);
-#endif
-    }
-
-  /* broadcast of loaded and computed quantities */
-  MPI_Bcast(Pk,   NPowerTable, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-  MPI_Bcast(logk, NPowerTable, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-  MPI_Bcast(CAMBScalefac, params.camb.NCAMB, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-  MPI_Bcast(lingrow, params.camb.NCAMB * NPowerTable, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-
-  gsl_spline_init(SPLINE[SP_PK], logk, Pk, NPowerTable);
-
-  const gsl_interp2d_type *T = gsl_interp2d_bicubic;
-  gsl_interp_accel *xacc = gsl_interp_accel_alloc();
-  gsl_interp_accel *yacc = gsl_interp_accel_alloc();
-  gsl_spline2d *AnotherSpline = gsl_spline2d_alloc(T, params.camb.NCAMB, NPowerTable);
-  gsl_spline2d_init(AnotherSpline, CAMBScalefac, logk, lingrow, params.camb.NCAMB, NPowerTable);
-
-  /* jumps to the first redshift that is within the bounds */
-  int First;
-  for (First = 0; First < NBINS && scalef[First]<CAMBScalefac[0]; First++)
-    ;
-
-  for (int i = First; i < NBINS && scalef[i] <= 1; i++)
-    for ( int j = 0; j < NkBINS; j++)
-      {
-	double Om;
-	double kappa =LOGKMIN + j*DELTALOGK;
-	double z  = 1./scalef[i]-1.;
-	Om = OmegaMatter(z);
-	grow1 [i+j*NBINS] = pow(10., gsl_spline2d_eval(AnotherSpline, 1./(1.+z), kappa, xacc, yacc));
-	grow2 [i+j*NBINS] = 3./7. * pow(grow1[i+j*NBINS],2.0) * pow(Om,-1./143.);
-	grow31[i+j*NBINS] = grow1[i]*grow1[i]*grow1[i] * pow(Om,-4./275.)/9.;
-	grow32[i+j*NBINS] = grow1[i]*grow1[i]*grow1[i] * pow(Om,-268./17875.)*5./42.;
-      }
-
-  Today=i-1;
-
-  /* growth rates at scale factor > 1 are estrapolated as power laws */
-  for (int j = 0; j < NkBINS; j++)
-    {
-      double slope = log10(grow1 [Today + j*NBINS]/grow1 [Today-1 + j*NBINS])/log10(scalef[Today]/scalef[Today-1]);
-      for(i=Today+1; i<NBINS; i++)
-	{
-	  grow1 [i+j*NBINS] = grow1 [Today+j*NBINS]*pow(scalef[i]/scalef[Today],slope);
-	  grow2 [i+j*NBINS] = grow2 [Today+j*NBINS]*pow(scalef[i]/scalef[Today],2*slope);
-	  grow31[i+j*NBINS] = grow31[Today+j*NBINS]*pow(scalef[i]/scalef[Today],3*slope);
-	  grow32[i+j*NBINS] = grow32[Today+j*NBINS]*pow(scalef[i]/scalef[Today],3*slope);
-	}
-    }
-
-  /* earlier growth rates are scaled with the scale factor */
-  for (int j = 0; j < NkBINS; j++)
-    for (int i = 0; i < First; i++)
-      {
-	double scalef_over_first  = scalef[i]/scalef[First];
-	double scalef_over_first2 = scalef_over_first * scalef_over_first;
-	double z = 1./scalef[i]-1.;
-	
-	grow1 [i+j*NBINS] = grow1 [First+j*NBINS] * scalef[i]/scalef[First];
-	grow2 [i+j*NBINS] = grow2 [First+j*NBINS] * scalef_over_first2;
-	grow31[i+j*NBINS] = grow31[First+j*NBINS] * scalef_over_first2*scalef_over_first;
-	grow32[i+j*NBINS] = grow32[First+j*NBINS] * scalef_over_first2*scalef_over_first;
-      }
-
-  /* f(Omega)'s */
-  for (int j = 0; j < NkBINS; j++)
-    {
-      for (int i = 0; i < Today; i++)
-	{
-	  int i1, i2;
-	  if (i == 0)
-	    {
-	      i1 = 0;
-	      i2 = 2;
-	    }
-	  else
-	    {
-	      i1 = i-1;
-	      i2 = i+1;
-	    }
-	  fomega1 [i+j*NBINS] = (grow1 [i2+j*NBINS]-grow1 [i1+j*NBINS]) / (scalef[i2]-scalef[i1]) * scalef[i]/grow1 [i+j*NBINS];
-	  fomega2 [i+j*NBINS] = (grow2 [i2+j*NBINS]-grow2 [i1+j*NBINS]) / (scalef[i2]-scalef[i1]) * scalef[i]/grow2 [i+j*NBINS];
-	  fomega31[i+j*NBINS] = (grow31[i2+j*NBINS]-grow31[i1+j*NBINS]) / (scalef[i2]-scalef[i1]) * scalef[i]/grow31[i+j*NBINS];
-	  fomega32[i+j*NBINS] = (grow32[i2+j*NBINS]-grow32[i1+j*NBINS]) / (scalef[i2]-scalef[i1]) * scalef[i]/grow32[i+j*NBINS];
-	}
-      
-      double slope;
-      
-      /* today and future values are better obtained by linear extrapolation */
-      slope = (fomega1[Today-1+j*NBINS]-fomega1[Today-2+j*NBINS])/(scalef[Today-1]-scalef[Today-2]);
-      for (int i = Today; i < NBINS; i++)
-	fomega1[i+j*NBINS] = fomega1[Today-1+j*NBINS] + slope * (scalef[i]-scalef[Today-1]);
-
-      slope = (fomega2[Today-1+j*NBINS]-fomega2[Today-2+j*NBINS])/(scalef[Today-1]-scalef[Today-2]);
-      for (int i = Today; i < NBINS; i++)
-	fomega2[i+j*NBINS] = fomega2[Today-1+j*NBINS] + slope * (scalef[i]-scalef[Today-1]);
-
-      slope = (fomega31[Today-1+j*NBINS]-fomega31[Today-2+j*NBINS])/(scalef[Today-1]-scalef[Today-2]);
-      for (int i = Today; i < NBINS; i++)
-	fomega31[i+j*NBINS] = fomega31[Today-1+j*NBINS] + slope * (scalef[i]-scalef[Today-1]);
-
-      slope = (fomega32[Today-1+j*NBINS]-fomega32[Today-2+j*NBINS])/(scalef[Today-1]-scalef[Today-2]);
-      for (int i = Today; i < NBINS; i++)
-	fomega32[i+j*NBINS] = fomega32[Today-1+j*NBINS] + slope * (scalef[i]-scalef[Today-1]);
-    }
-
-  gsl_spline2d_free(AnotherSpline);
-  gsl_interp_accel_free(yacc);
-  gsl_interp_accel_free(xacc);
-  
-  free(lingrow);
-  free(CAMBScalefac);
-  free(Pk);
-  free(logk);
-
-  return 0;
-}
-#endif
-
 
 double PowerSpec_Tabulated(double k)
 {
