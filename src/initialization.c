@@ -135,9 +135,10 @@ int initialization()
   if (check_parameters_and_directives())
     return 1;
 
-  /* estimates the size of output file */
+  /* estimates the size of output file
   if (estimate_file_size())
     return 1;
+  */
 
   /* this barrier is set to have correct stdout in case the run cannot start */
   fflush(stdout);
