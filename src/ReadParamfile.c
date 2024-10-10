@@ -291,14 +291,6 @@ int read_parameter_file()
       addr[nt] = &(internal.constrain_task_decomposition[2]);
       id[nt++] = INT_SKIP_DEF;
       
-
-#ifdef USE_FFT_THREADS
-// Using the same threads for FFTs
-//      strcpy(tag[nt], "NThreads");
-//      addr[nt] = &(internal.nthreads_fft);
-//      id[nt++] = INT;
-#endif      
-      
       for (j=0; j<nt; j++)     /* All logical tags are FALSE by default */
 	if (id[j]==LOGICAL)
 	  *((int *) addr[j]) = 0;

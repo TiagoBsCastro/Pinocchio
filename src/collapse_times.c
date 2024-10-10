@@ -316,15 +316,7 @@ inline double  ell_sng(int ismooth, double l1, double l2, double l3) {
 	gsl_odeiv2_system   ode_sys   = {sng_system, jac, 9, (void*)&ode_param};
 
 /* GrowingMode is linear growing mode, interpolated on the grid. See cosmo.c for details (double GrowingMode(double z, double k))*/
-#ifdef SCALE_DEPENDENT
-
-	double D_in = GrowingMode(1./amin-1.,params.k_for_GM/Smoothing.Radius[ismooth]*params.InterPartDist); 
-
-#else
-
 	double D_in =  GrowingMode(1./amin-1.,1./Smoothing.Radius[ismooth]);
-
-#endif
 
 	double y[9] = {l1*D_in, l2*D_in, l3*D_in,
 		          l1*D_in/(l1*D_in - 1.), l2*D_in/(l2*D_in - 1.), l3*D_in/(l3*D_in - 1.),

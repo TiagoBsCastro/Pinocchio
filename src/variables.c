@@ -10,18 +10,12 @@ internal_data   internal;
 
 char *main_memory, *wheretoplace_mycat;
 product_data *products, *frag;
-#ifdef GPU_OMP
-gpu_product_data gpu_products, host_products;
-#endif // GPU_OMP
 unsigned int **seedtable;  // QUESTO RIMANE?
 unsigned int   *cubes_ordering;
 double **kdensity;
 double **density;
 double ***first_derivatives;
 double ***second_derivatives;
-#ifdef GPU_OMP
-gpu_second_derivatives_data gpu_second_derivatives;
-#endif // GPU_OMP
 double **VEL_for_displ;
 
 #ifdef TWO_LPT
@@ -63,10 +57,6 @@ int *frag_pos,*indices,*indicesY,*sorted_pos,*group_ID,*linking_list;
 unsigned int *frag_map, *frag_map_update;
 double f_m, f_rm, espo, f_a, f_ra, f_200, sigmaD0;
 
-#ifdef SCALE_DEPENDENT
-ScaleDep_data ScaleDep;
-#endif
-
 gsl_integration_workspace * workspace;
 gsl_rng *random_generator;
 
@@ -74,17 +64,6 @@ mf_data mf;
 
 gsl_spline **SPLINE;
 gsl_interp_accel **ACCEL;
-#if defined(CUSTOM_INTERPOLATION) || defined(GPU_OMP)
-CubicSpline *host_spline;
-#if defined(GPU_OMP)
-CubicSpline gpu_spline;
-#endif // GPU_OMP
-#endif // defined(CUSTOM_INTERPOLATION) || defined(GPU_OMP)
-
-#if defined(SCALE_DEPENDENT) && defined(ELL_CLASSIC)
-gsl_spline **SPLINE_INVGROW;
-gsl_interp_accel **ACCEL_INVGROW;
-#endif
 
 #ifdef MOD_GRAV_FR
 double H_over_c;

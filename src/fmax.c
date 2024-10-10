@@ -54,11 +54,6 @@ int compute_fmax(void)
     5) re-initialize fft for the small-scale grid
   */
 
-#ifdef SCALE_DEPENDENT
-  ScaleDep.order=0; /* collapse times must be computed as for LambdaCDM */
-#endif
-
-
   /****************************
    * CYCLE ON SMOOTHING RADII *
    ****************************/
@@ -100,34 +95,8 @@ int compute_fmax(void)
 
       cputmp=MPI_Wtime();
 
-#ifdef TABULATED_CT
-      /* initialize spline for interpolating collapse times */
-      if (initialize_collapse_times(ismooth,0))
+      if (compute_collapse_times(ismooth))
 	return 1;
-
-      if (!ThisTask)
-	{
-	  if (strcmp(params.CTtableFile,"none"))
-	    printf("[%s] Collapse times read from file %s\n",fdate(),params.CTtableFile);
-	  else
-	    printf("[%s] Collapse times computed for interpolation, cpu time =%f s\n",fdate(),cputmp);
-	}
-#endif // TABULATED_CT
-
-      if (
-#if defined(GPU_OMP)
-	  compute_collapse_times_gpu(ismooth)
-#else
-	  compute_collapse_times(ismooth)
-#endif // GPU_OMP
-	  )
-	return 1;
-
-#ifdef TABULATED_CT
-      /* this is needed only for debug options, to be removed in the official code */
-      if (reset_collapse_times(ismooth))
-	return 1;
-#endif // TABULATED_CT
 
       cputmp=MPI_Wtime()-cputmp;
       if (!ThisTask)
@@ -149,23 +118,6 @@ int compute_fmax(void)
       fflush(stdout);
       MPI_Barrier(MPI_COMM_WORLD);
     }
-
-#if defined(CUSTOM_INTERPOLATION) || defined(GPU_OMP) 
-  
-  custom_cubic_spline_free(host_spline);
-
-#endif // defined(CUSTOM_INTERPOLATION) || defined(GPU_OMP)  
-  
-#if defined(GPU_OMP)
-
-  /*---------------- Free GPU/CPU memory ----------------------*/
-
-  /*----- Free GPU spline ----*/
-  omp_target_free(internal.device.gpu_main_memory, internal.device.devID);
-  free(host_products.Rmax);
-  free(host_products.Fmax);
-  
-#endif // GPU_OMP  
   
   /********************************
    * COMPUTATION OF DISPLACEMENTS *

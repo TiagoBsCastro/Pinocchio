@@ -42,18 +42,9 @@
 #define DELTA_C ((double)1.686)
 #define SHAPE_EFST ((double)0.21)
 
-//#define FOMEGA_GAMMA 0.554
-#if defined(FOMEGA_GAMMA) && defined(SCALE_DEPENDENT)
-#error Do not use FOMEGA_GAMMA with SCALE_DEPENDENT
-#endif
-
 static int Today;
 static int WhichSpectrum, NPowerTable=0, NtabEoS=0;
 static double PkNorm, MatterDensity, OmegaK, OmegaRad;
-
-#ifdef SCALE_DEPENDENT
-static double kmin,kmax;
-#endif
 
 int system_of_ODEs(double, const double [], double *, void *);
 int system_of_ODEs_small(double, const double [], double *, void *);
@@ -86,9 +77,6 @@ int initialize_cosmology()
   double ode_param;
   double y[NVAR], x1, x2, hh, norm, result, error, SqrtOmegaK, R0, k;
   int status=GSL_SUCCESS, i, j;
-#ifdef SCALE_DEPENDENT
-  int ik;
-#endif
   char filename[LBLENGTH];
   FILE *fd;
   double log_amin=-4., dloga=-log_amin/(double)(NBINS-NBB);
@@ -152,11 +140,6 @@ int initialize_cosmology()
       free(IntEoS);
       free(scalef);
     }
-
-#ifdef SCALE_DEPENDENT
-  kmin=pow(10.,LOGKMIN);
-  kmax=pow(10.,LOGKMIN+(NkBINS-1)*DELTALOGK);
-#endif
 
   /* The power spectrum is initialized; in case, it is read from file(s) */
   if (initialize_PowerSpectrum())
@@ -383,19 +366,7 @@ int initialize_cosmology()
 	grow32[i+j*NBINS] = log10(grow32[i+j*NBINS]);
       }
 
-#if defined(CUSTOM_INTERPOLATION) || defined(GPU_OMP)
-
-  /* host custom spline allocation */
-  host_spline = custom_cubic_spline_alloc(NBINS);
-  /* host custom spline initialization */
-  custom_cubic_spline_init(host_spline, grow1, scalef, NBINS);
-  
-#else
-
   gsl_spline_init(SPLINE[SP_INVGROW], grow1, scalef, NBINS);
-  
-#endif // defined(CUSTOM_INTERPOLATION) || defined(GPU_OMP)
-
 
   /* initialization of spline interpolations of time-dependent quantities using GSL */
   gsl_spline_init(SPLINE[SP_TIME], scalef, cosmtime, NBINS);
@@ -504,91 +475,10 @@ int initialize_cosmology()
 	  }
       fclose(fd);
 
-#ifdef SCALE_DEPENDENT
-      /* writes scale-dependent growth rates on a file */
-      strcpy(filename,"pinocchio.");
-      strcat(filename,params.RunFlag);
-      strcat(filename,".scaledep.out");
-
-      fd=fopen(filename,"w");
-
-      fprintf(fd,"# Scale-dependent growth rates\n");
-      fprintf(fd,"# Scales considered: ");
-      for (ik=0; ik<NkBINS; ik++)
-	{
-#ifdef MOD_GRAV_FR
-	  /* with modified gravity the first wavenumber is set to zero */
-	  if (!ik)
-	    k=0.0;
-	  else
-#endif
-	    k = pow(10., LOGKMIN + ik*DELTALOGK);
-	  if (ik==NkBINS-1)
-	    fprintf(fd,"%d) k=%8.5f\n",ik+1,k);
-	  else
-	    fprintf(fd,"%d) k=%8.5f, ",ik+1,k);
-	}
-
-      fprintf(fd,"# 1: scale factor\n");
-      fprintf(fd,"# %d-%d: linear growth rate\n",                     2,  NkBINS+1);
-      fprintf(fd,"# %d-%d: 2nd-order growth rate\n",           NkBINS+2,2*NkBINS+1);
-      fprintf(fd,"# %d-%d: first 3rd-order growth rate\n",   2*NkBINS+2,3*NkBINS+1);
-      fprintf(fd,"# %d-%d: second 3rd-order growth rate\n",  3*NkBINS+2,4*NkBINS+1);
-      fprintf(fd,"# %d-%d: linear d ln D/d ln a\n",          4*NkBINS+2,5*NkBINS+1);
-      fprintf(fd,"# %d-%d: 2nd-order d ln D/d ln a\n",       5*NkBINS+2,6*NkBINS+1);
-      fprintf(fd,"# %d-%d: first 3rd-order d ln D/d ln a\n", 6*NkBINS+2,7*NkBINS+1);
-      fprintf(fd,"# %d-%d: second 3rd-order d ln D/d ln a\n",7*NkBINS+2,8*NkBINS+1);
-      fprintf(fd,"#\n");
-
-      for (i=0; i<NBINS; i++)
-	{
-	  fprintf(fd," %12lg",pow(10.,SPLINE[SP_TIME]->x[i]));
-	  for (ik=0; ik<NkBINS; ik++)
-	    fprintf(fd," %12lg",pow(10.,SPLINE[SP_GROW1+ik]->y[i]));
-	  fprintf(fd,"   ");
-	  for (ik=0; ik<NkBINS; ik++)
-	    fprintf(fd," %12lg",pow(10.,SPLINE[SP_GROW2+ik]->y[i]));
-	  fprintf(fd,"   ");
-	  for (ik=0; ik<NkBINS; ik++)
-	    fprintf(fd," %12lg",pow(10.,SPLINE[SP_GROW31+ik]->y[i]));
-	  fprintf(fd,"   ");
-	  for (ik=0; ik<NkBINS; ik++)
-	    fprintf(fd," %12lg",pow(10.,SPLINE[SP_GROW32+ik]->y[i]));
-	  fprintf(fd,"   ");
-	  for (ik=0; ik<NkBINS; ik++)
-	    fprintf(fd," %12lg",SPLINE[SP_FOMEGA1+ik]->y[i]);
-	  fprintf(fd,"   ");
-	  for (ik=0; ik<NkBINS; ik++)
-	    fprintf(fd," %12lg",SPLINE[SP_FOMEGA2+ik]->y[i]);
-	  fprintf(fd,"   ");
-	  for (ik=0; ik<NkBINS; ik++)
-	    fprintf(fd," %12lg",SPLINE[SP_FOMEGA31+ik]->y[i]);
-	  fprintf(fd,"   ");
-	  for (ik=0; ik<NkBINS; ik++)
-	    fprintf(fd," %12lg",SPLINE[SP_FOMEGA32+ik]->y[i]);
-	  fprintf(fd,"\n");
-	}
-      fclose(fd);
-#endif
-
     }
 
   return 0;
 }
-
-#ifdef MOD_GRAV_FR
-/* scale-dependent functions for 2LPT term */
-
-double mu(double a, double k) {
-  double B1, B2, emme;
-  B1   = params.Omega0 / pow(a, 3.) + 4. * params.OmegaLambda;
-  B2   = params.Omega0 + 4. * params.OmegaLambda;
-  emme = 0.5 * H_over_c * H_over_c * pow(B1, 3.) / (B2 * B2 * FR0); 
-  return 1. + k * k / 3. / (k * k + a * a * emme);
-}
-
-#endif
-
 
 int system_of_ODEs(double x, const double y[], double *dydx, void *param)
 {
@@ -952,15 +842,9 @@ int initialize_PowerSpectrum(void)
     }
   else if (!strcmp(params.FileWithInputSpectrum,"CAMBTable"))
     {
-#if defined(SCALE_DEPENDENT) && defined(READ_PK_TABLE)
-      WhichSpectrum=5;
       if (!ThisTask)
-	printf("Scale-dependent power spectrum will be read from CAMB files\n");
-#else
-      if (!ThisTask)
-	printf("ERROR: to read CAMBTable P(k) use the SCALE_DEPENDENT and READ_PK_TABLE options\n");
+	printf("ERROR: to read CAMBTable P(k) use the SCALE_DEPENDENT (DEPRECATED) and READ_PK_TABLE options\n");
       return 1;
-#endif
     }
   else
     {
@@ -1740,30 +1624,8 @@ double InterpolateGrowth(double z, double k, int pointer)
 {
   /* This function interpolates the table for all scale-dependent growth functions */
 
-#ifdef SCALE_DEPENDENT
-  int kk;
-  double dk;
-  /* NB in modified gravity kmin is set to 0, but this makes log interpolation impossible
-     so we leave it to kmin */
-  if (k<kmin)
-    return my_spline_eval(SPLINE[pointer], -log10(1.+z), ACCEL[pointer]);
-  else if (k>kmax)
-    return my_spline_eval(SPLINE[pointer+NkBINS-1], -log10(1.+z), ACCEL[pointer+NkBINS-1]);
-  else
-    {
-      dk = (log10(k)-LOGKMIN)/DELTALOGK;
-      kk=(int)dk;
-      dk-=kk;
-
-      return dk * my_spline_eval(SPLINE[pointer+kk+1], -log10(1.+z), ACCEL[pointer+kk+1]) +
-	 (1-dk) * my_spline_eval(SPLINE[pointer+kk  ], -log10(1.+z), ACCEL[pointer+kk  ]);
-    }
-#else
   /* scale-independent case, just return the interpolation */
   return my_spline_eval(SPLINE[pointer], -log10(1.+z), ACCEL[pointer]);
-#endif
-
-
 }
 
 
@@ -1841,27 +1703,8 @@ double InverseGrowingMode(const double D,
 {
   /* redshift corresponding to a linear growing mode, interpolation on the grid
      DIMENSIONLESS */
-#ifdef SCALE_DEPENDENT
 
-  return 1./pow(10.,my_spline_eval(SPLINE_INVGROW[ismooth], log10(D), ACCEL_INVGROW[ismooth])) -1.;
-
-#else
-
-   #if defined(CUSTOM_INTERPOLATION) && !defined(GPU_OMP)
-
-      return 1./pow(10.0, custom_cubic_spline_eval(host_spline, log10(D))) -1;
-  
-   #elif defined(GPU_OMP)
-
-      return ((1.0 / pow(10.0, custom_cubic_spline_eval(&gpu_spline, log10(D)))) -1);
-
-   #elif !defined(CUSTOM_INTERPOLATION) && !defined(GPU_OMP)
-  
      return 1./pow(10.,my_spline_eval(SPLINE[SP_INVGROW], log10(D), ACCEL[SP_INVGROW])) -1.;
-
-   #endif // CUSTOM_INTERPOLATION && GPU_OMP
-
-#endif // SCALE_DEPENDENT
 }
 #endif // ELL_CLASSIC
 

@@ -19,29 +19,8 @@
 #include <pfft.h>
 #include <assert.h>
 
-#ifdef _OPENMP
-   #include <omp.h>
-#else
-   #define omp_get_thread_num()  0
-   #define omp_get_num_threads() 1
-#endif // _OPENMP
-#ifdef USE_GPERFTOOLS
-#include <gperftools/profiler.h>
-#endif
-
-#ifdef GPU_OMP
-#define ALIGN_GPU     16
-#define GPU_OMP_BLOCK 64
-
-// sanity check
-#if GPU_OMP_BLOCK > 1024
-#error "GPU_OMP_BLOCK cannot be larger than 1024"
-#endif
-
-#endif // GPU_OMP
-#if defined(CUSTOM_INTERPOLATION) || defined(GPU_OMP)
-#include "cubic_spline_interpolation.h"
-#endif // defined(CUSTOM_INTERPOLATION) || defined(GPU_OMP)
+#define omp_get_thread_num()  0
+#define omp_get_num_threads() 1
 
 
 /* this library is used to vectorize the computation of collapse times */
@@ -108,10 +87,6 @@
 #define ELL_CLASSIC
 #endif
 
-#if (defined(READ_PK_TABLE) || defined(MOD_GRAV_FR)) && !defined(SCALE_DEPENDENT)
-#define SCALE_DEPENDENT
-#endif
-
 #if defined(READ_PK_TABLE) && defined(MOD_GRAV_FR)
 #error REAK_PK_TABLE and MOD_GRAV_FR cannot be chosen together
 #endif
@@ -146,53 +121,6 @@ extern int ThisTask,NTasks;
 /* extern int pfft_flags_c2r, pfft_flags_r2c; */
 extern MPI_Comm FFT_Comm;
 
-#if defined(GPU_OMP)
-
-/* memory in the CubicSpline */
-struct gpu_memory_spline
-{
-  size_t offset;
-  size_t x;
-  size_t y;
-  size_t d2y_data;
-  size_t coeff_a;
-  size_t coeff_b;
-  size_t coeff_c;
-  size_t coeff_d;
-  size_t count;
-};
-
-struct gpu_memory_products
-{
-  size_t offset;
-  size_t Rmax;
-  size_t Fmax;
-  size_t count;
-};
-
-struct gpu_memory_second_derivatives
-{
-  size_t offset;
-  size_t tensor[6];
-  size_t count;
-};
-  
-typedef struct
-{
-  int hostID;                                                     /* host's (MPI process) ID                                */
-  int devID;                                                      /* device's ID assigned to the MPI process                */
-                                                                  /* one-to-one correspondence between MPI processes        */
-                                                                  /* and GPUs is assumed                                    */
-  size_t memory;                                                  /* total GPU required memory                              */
-  char *gpu_main_memory;                                          /* pointer to the total memory allocated on the GPU       */
-  struct gpu_memory_spline memory_spline;                         /* memory in bytes required by the GPU spline             */
-  struct gpu_memory_products memory_products;                     /* memory in bytes required by the GPU products           */
-  struct gpu_memory_second_derivatives memory_second_derivatives; /* memory in bytes required by the GPU second derivatives */
-} gpuOMP;
-
-#endif // GPU_OMP
-
-
 typedef struct
 {
   int tasks_subdivision_dim;            /* 1, 2 or 3 to divide in slabs, pencils and volumes */
@@ -206,9 +134,6 @@ typedef struct
   int large_plane;                      /* select the new generation of ICs */
   int nthreads_omp;                     /* number of OMP threads */
   int nthreads_fft;                     /* number of FFT threads */
-#ifdef GPU_OMP
-  gpuOMP device;                        /* structure to handle the GPU */
-#endif // GPU_OMP
 } internal_data;
 extern internal_data internal;
 
@@ -254,19 +179,6 @@ typedef struct  // RIALLINEARE?
 
 } product_data __attribute__((aligned (ALIGN)));  // VERIFICARE
 
-#if defined(GPU_OMP)
-
-typedef struct
-{
-  int *Rmax;
-  PRODFLOAT *Fmax;
-} gpu_product_data;
-
-extern gpu_product_data gpu_products, host_products;
-#pragma omp declare target(gpu_products)
-
-#endif // GPU_OMP
-
 extern char *main_memory, *wheretoplace_mycat;
 
 extern product_data *products, *frag;
@@ -279,17 +191,6 @@ extern double **kdensity;
 extern double **density;
 extern double ***first_derivatives;
 extern double ***second_derivatives;
-#ifdef GPU_OMP
-
-typedef struct
-{
-  double *tensor[6];
-} gpu_second_derivatives_data;
-
-extern gpu_second_derivatives_data gpu_second_derivatives;
-#pragma omp declare target(gpu_second_derivatives)
-
-#endif // GPU_OMP
 
 extern double **VEL_for_displ;
 
@@ -308,9 +209,6 @@ typedef struct
 {
   int Nsmooth;
   double *Radius, *Variance, *TrueVariance;
-#ifdef SCALE_DEPENDENT
-  double *Rad_GM, *k_GM_dens, *k_GM_displ, *k_GM_vel;
-#endif
 } smoothing_data;
 extern smoothing_data Smoothing;
 
@@ -341,15 +239,6 @@ typedef struct
   char MatterFile[SBLENGTH], TransferFile[SBLENGTH], RunName[SBLENGTH], RedshiftsFile[LBLENGTH];
   double *Logk, *LogPkref, D2ref, *Scalef, *RefGM;
 } camb_data;
-#endif
-
-#ifdef SCALE_DEPENDENT
-typedef struct
-{
-  int order;
-  double redshift;
-} ScaleDep_data;
-extern ScaleDep_data ScaleDep;
 #endif
 
 typedef struct
@@ -402,11 +291,7 @@ typedef struct
     deriv, mem_transf, partial, set_subboxes, set_plc, memory_allocation, fft_initialization
 #ifdef PLC
     ,plc
-#endif
-
-#ifdef GPU_OMP
-    , gpu_computation, gpu_mem_transf
-#endif // GPU_OMP    
+#endif  
     ;
 } cputime_data;
 extern cputime_data cputime;
@@ -506,11 +391,6 @@ extern mf_data mf;
 // Declarations for the variables
 extern gsl_spline **SPLINE;
 extern gsl_interp_accel **ACCEL;
-#if defined(SCALE_DEPENDENT) && defined(ELL_CLASSIC)
-extern gsl_spline **SPLINE_INVGROW;
-extern gsl_interp_accel **ACCEL_INVGROW;
-#endif
-
 
 #ifdef MOD_GRAV_FR
 extern double H_over_c;
@@ -580,9 +460,6 @@ extern Segment_data Segment;
 
 /* prototypes for functions defined in collapse_times.c */
 int compute_collapse_times(int);
-#if defined(GPU_OMP)
-int compute_collapse_times_gpu(int);
-#endif // GPU_OMP
 
 #ifdef TABULATED_CT
 int initialize_collapse_times(int, int);
@@ -619,9 +496,6 @@ int GenIC_large(int);  // NE BASTA UNA?
 //double VarianceOnGrid(int, double); //, double);
 
 /* prototypes for functions defined in initialization.c */
-#ifdef GPU_OMP
-int initialization_gpu_omp();
-#endif
 int initialization();
 int find_start(int, int, int);
 int find_length(int, int, int);
@@ -657,9 +531,6 @@ double GrowingMode_2LPT(double,double);
 double GrowingMode_3LPT_1(double,double);
 double GrowingMode_3LPT_2(double,double);
 double InverseGrowingMode(const double, const int);
-#ifdef GPU_OMP
-#pragma omp declare target (InverseGrowingMode)
-#endif // GPU_OMP
 double ComovingDistance(double);
 double InverseComovingDistance(double);
 double dComovingDistance_dz(double);

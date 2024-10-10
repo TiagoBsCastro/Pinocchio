@@ -1,18 +1,4 @@
-/* #if defined(SCALE_DEPENDENT) && defined(ELL_CLASSIC) */
-/* #error Trying to compile with ELL_CLASSIC and SCALE_DEPENDENT together */
-/* #endif */
-
-#if defined(MOD_GRAV_FR) && !defined(SCALE_DEPENDENT)
-#define SCALE_DEPENDENT
-#endif
-
-#ifndef SCALE_DEPENDENT
 #define NkBINS 1
-#else
-#define NkBINS 10
-#define LOGKMIN ((double)-3.0)
-#define DELTALOGK ((double)0.5)
-#endif
 
 #define SP_TIME     0
 #define SP_INVTIME  1

@@ -156,10 +156,6 @@ int compute_fft_plans()
       pfft_flags = 0;
       if(params.use_transposed_fft)
 	pfft_flags |= PFFT_TRANSPOSED_OUT;
-#ifdef USE_FFT_THREADS
-      fftw_plan_with_nthreads(internal.nthreads_fft);
-      pfft_plan_with_nthreads(internal.nthreads_fft);
-#endif
       GRID.forward_plan = pfft_plan_dft_r2c_3d(DIM, rvector_fft[ThisGrid], cvector_fft[ThisGrid],
 					       FFT_Comm, PFFT_FORWARD, pfft_flags);
 
@@ -173,10 +169,6 @@ int compute_fft_plans()
       pfft_flags = 0;
       if(params.use_transposed_fft)
 	pfft_flags |= PFFT_TRANSPOSED_IN;
-#ifdef USE_FFT_THREADS
-      fftw_plan_with_nthreads(internal.nthreads_fft);
-      pfft_plan_with_nthreads(internal.nthreads_fft);
-#endif
       GRID.reverse_plan = pfft_plan_dft_c2r_3d(DIM, cvector_fft[ThisGrid], rvector_fft[ThisGrid], 
 					       FFT_Comm, PFFT_BACKWARD, pfft_flags);
     }
@@ -256,9 +248,6 @@ int compute_derivative(int ThisGrid, int first_derivative, int second_derivative
 {
   int    swap, local[3], start[3], C[3], N[3], Nhalf[3];
   double knorm[3];
-#ifdef SCALE_DEPENDENT
-  double k_module;
-#endif
   
 #ifdef DEBUG
   sprintf(filename,"results.%d-%d.%d",first_derivative,second_derivative,ThisTask);
@@ -340,34 +329,6 @@ int compute_derivative(int ThisGrid, int first_derivative, int second_derivative
 	      double k_z  = knorm[_z_] * ii[_z_];
 
               double k_squared  = k2_1 + k_z * k_z;
-
-#ifdef SCALE_DEPENDENT
-	      double k_module = sqrt(k_squared);
-
-	      /* In the scale-dependent case the delta(k) must be multiplied 
-		 by the relevant growth rate */
-	      switch (ScaleDep.order)
-		{
-		case 0:
-		  growth_rate = 1.0;
-		  break;
-		case 1:
-		  growth_rate = GrowingMode(ScaleDep.redshift,k_module);
-		  break;
-		case 2:
-		  growth_rate = GrowingMode_2LPT(ScaleDep.redshift,k_module);
-		  break;
-		case 3:
-		  growth_rate = GrowingMode_3LPT_1(ScaleDep.redshift,k_module);
-		  break;
-		case 4:
-		  growth_rate = GrowingMode_3LPT_2(ScaleDep.redshift,k_module);
-		  break;
-		default:
-		  growth_rate = 1.0;
-		  break;
-		}
-#endif
 
 	      int index = 2*(( idx * local[_y_] + idy ) * local[_z_] + idz);
 	      
