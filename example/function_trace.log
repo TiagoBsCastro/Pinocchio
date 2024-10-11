@@ -1,0 +1,44 @@
+Function call tracing disabled.
+Function call tracing enabled.
+Starting program: /home/tcastro/Pinocchio/example/pinocchio.x parameter_file
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.ubuntu.com>
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+warning: could not find '.gnu_debugaltlink' file for /lib/x86_64-linux-gnu/libcap.so.2
+[Detaching after fork from child process 66462]
+[New Thread 0x7ffff70006c0 (LWP 66466)]
+warning: could not find '.gnu_debugaltlink' file for /usr/lib/x86_64-linux-gnu/pmix2/lib/pmix/pmix_mca_pcompress_zlib.so
+[New Thread 0x7ffff62006c0 (LWP 66467)]
+warning: could not find '.gnu_debugaltlink' file for /usr/lib/x86_64-linux-gnu/hwloc/hwloc_opencl.so
+warning: could not find '.gnu_debugaltlink' file for /usr/lib/x86_64-linux-gnu/hwloc/hwloc_xml_libxml.so
+warning: could not find '.gnu_debugaltlink' file for /usr/lib/x86_64-linux-gnu/hwloc/hwloc_pci.so
+warning: could not find '.gnu_debugaltlink' file for /usr/lib/x86_64-linux-gnu/hwloc/hwloc_gl.so
+[Thread 0x7ffff62006c0 (LWP 66467) exited]
+[Thread 0x7ffff70006c0 (LWP 66466) exited]
+[Inferior 1 (process 66453) exited normally]
+quit
+Function call tracing enabled.
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.ubuntu.com>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+warning: could not find '.gnu_debugaltlink' file for /lib/x86_64-linux-gnu/libcap.so.2
+[Detaching after fork from child process 67254]
+[New Thread 0x7ffff70006c0 (LWP 67257)]
+warning: could not find '.gnu_debugaltlink' file for /usr/lib/x86_64-linux-gnu/pmix2/lib/pmix/pmix_mca_pcompress_zlib.so
+[New Thread 0x7ffff62006c0 (LWP 67258)]
+warning: could not find '.gnu_debugaltlink' file for /usr/lib/x86_64-linux-gnu/hwloc/hwloc_opencl.so
+warning: could not find '.gnu_debugaltlink' file for /usr/lib/x86_64-linux-gnu/hwloc/hwloc_xml_libxml.so
+warning: could not find '.gnu_debugaltlink' file for /usr/lib/x86_64-linux-gnu/hwloc/hwloc_pci.so
+warning: could not find '.gnu_debugaltlink' file for /usr/lib/x86_64-linux-gnu/hwloc/hwloc_gl.so
+[Thread 0x7ffff62006c0 (LWP 67258) exited]
+[Thread 0x7ffff70006c0 (LWP 67257) exited]
+[Inferior 1 (process 67251) exited normally]

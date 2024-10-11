@@ -120,29 +120,6 @@ int compute_LPT_displacements()
 	if (compute_derivative(0,ia,ib))
 	  return 1;
 
-/* #pragma omp parallel */
-/* 	{ */
-/* 	  unsigned int fact = MyGrids[0].GSlocal[_x_] * MyGrids[0].GSlocal[_y_]; */
-	  
-/* 	  /\* this substitutes write_from_rvector: it adds to the 3LPT_2 source term the mixed products of the two second derivative tensors *\/ */
-/* #pragma omp for nowait */
-/* 	  for (int local_z = 0; local_z < MyGrids[0].GSlocal[_z_]; local_z++) */
-/* 	    { */
-/* 	      int idx_z = local_z * fact; */
-/* 	      for ( int local_y = 0; local_y < MyGrids[0].GSlocal[_y_]; local_y++) */
-/* 		{ */
-/* 		  int idx_y = local_y * MyGrids[0].GSlocal[_x_] + idx_z; */
-/* 		  for ( int local_x = 0; local_x < MyGrids[0].GSlocal[_x_]; local_x++)	   */
-/* 		    {	   */
-/* 		      int index = idx_y + local_x; */
-		      
-/* 		      source_3LPT_2[index] -= 2.0 * (ider<=3? 1.0 : 2.0) *    /\* the first 2 factor is needed because nabla2phi is half the theoretical one *\/ */
-/* 			*(rvector_fft[0] + local_x + (MyGrids[0].GSlocal[_x_]) * (local_y + local_z * MyGrids[0].GSlocal[_y_])) */
-/* 			* second_derivatives[0][ider-1][index]; */
-/* 		    } */
-/* 		} */
-/* 	    } */
-
 	  for (int index=0; index<MyGrids[0].total_local_size; index++)
 	    /* the first 2 factor is needed because nabla2phi is half the theoretical one */
 	    source_3LPT_2[index] -= 2.0 * (ider<=3? 1.0 : 2.0) *

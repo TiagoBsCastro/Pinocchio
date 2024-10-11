@@ -548,22 +548,10 @@ int set_subboxes()
   subbox.pbc[_y_] = (subbox.nbox[_y_]==1);
   subbox.pbc[_z_] = (subbox.nbox[_z_]==1);
 
-/* #ifndef BL_GRANDISSIMA */
-
-/*   subbox.safe[_x_] = (subbox.pbc[_x_] ? 0 : (find_length(MyGrids[0].GSglobal[_x_],subbox.nbox[_x_],0)-1)/2); */
-/*   subbox.safe[_y_] = (subbox.pbc[_y_] ? 0 : (find_length(MyGrids[0].GSglobal[_y_],subbox.nbox[_y_],0)-1)/2); */
-/*   subbox.safe[_z_] = (subbox.pbc[_z_] ? 0 : (find_length(MyGrids[0].GSglobal[_z_],subbox.nbox[_z_],0)-1)/2); */
-
-/* #else */
-
-  /* the boundary layer can be as large as to nearly fill the whole box,
-     but the number of particles must be represented by an unsigned int */
   int BB = (int)(params.BoundaryLayerFactor*sizeG+1);
   subbox.safe[_x_] = (subbox.pbc[_x_] ? 0 : (BB > MyGrids[0].GSglobal[_x_]/2 - subbox.Lgrid[_x_]/2 - 1 ? MyGrids[0].GSglobal[_x_]/2 - subbox.Lgrid[_x_]/2 - 1 : BB));
   subbox.safe[_y_] = (subbox.pbc[_y_] ? 0 : (BB > MyGrids[0].GSglobal[_y_]/2 - subbox.Lgrid[_y_]/2 - 1 ? MyGrids[0].GSglobal[_y_]/2 - subbox.Lgrid[_y_]/2 - 1 : BB));
   subbox.safe[_z_] = (subbox.pbc[_z_] ? 0 : (BB > MyGrids[0].GSglobal[_z_]/2 - subbox.Lgrid[_z_]/2 - 1 ? MyGrids[0].GSglobal[_z_]/2 - subbox.Lgrid[_z_]/2 - 1 : BB));
-
-//#endif
 
   subbox.Lgwbl[_x_] = subbox.Lgrid[_x_] + 2*subbox.safe[_x_];
   subbox.Lgwbl[_y_] = subbox.Lgrid[_y_] + 2*subbox.safe[_y_];
@@ -749,7 +737,7 @@ int set_fft_decomposition(void)
     // some constraints about how to decompose fft are set in parameter file
     {
       // --- check trivial errors
-      // just ot be sure about trivial typos, check that none is < 0
+      // just to be sure about trivial typos, check that none is < 0
       if (  internal.constrain_task_decomposition[0] < 0 ||
 	    internal.constrain_task_decomposition[1] < 0 ||
 	    internal.constrain_task_decomposition[2] < 0 )

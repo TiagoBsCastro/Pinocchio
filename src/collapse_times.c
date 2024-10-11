@@ -352,7 +352,6 @@ double ell(const int ismooth,
 /* Performed once by the host */
 void common_initialization(const unsigned int size)
 {
-#pragma omp parallel for
   for (unsigned int i=0 ; i<size ; i++)
     {
       /*----------- Common initialization ----------- */
@@ -408,7 +407,6 @@ int compute_collapse_times(int ismooth)
   double local_average = 0.0, local_variance = 0.0;
   int all_fails = 0; 
   
-  #pragma omp parallel for reduction(+: local_average, local_variance, all_fails)  
   for (unsigned int index=0 ; index<total_size ; index++)
     {
       /* Computation of second derivatives of the potential i.e. the gravity Hessian */
@@ -436,8 +434,6 @@ int compute_collapse_times(int ismooth)
       products[index].Fmax = (update ? Fnew    : products[index].Fmax);
 
     } // target region  
-
-  /* ------------- Updates cpu collapse time for a single threads -----------------------------*/
    
   /* Fail check during computation of the inverse collapse time */
   /* If there were failures, an error message is printed and the function returns 1 */
