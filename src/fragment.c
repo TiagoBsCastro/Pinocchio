@@ -478,6 +478,21 @@ int fragment()
            fdate(), BestPredPeakFactor, params.PredPeakFactor);
   }
 
+#ifdef MASS_MAPS
+  /* If requested, produce mass maps between provided PLC z-limits. */
+  if (params.NumMassPlanes > 0)
+  {
+    double z_start = params.StartingzForPLC;
+    double z_end = params.LastzForPLC;
+    if (z_start < z_end)
+    {
+      double tmpz = z_start; z_start = z_end; z_end = tmpz;
+    }
+    if (write_mass_maps(z_start, z_end))
+      return 1;
+  }
+#endif
+
   return 0;
 }
 

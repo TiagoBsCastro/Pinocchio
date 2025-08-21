@@ -75,3 +75,7 @@ int compute_mf(int);
 #ifdef PLC
 int write_PLC();
 #endif
+
+#ifdef MASS_MAPS
+int write_mass_maps(double z_start, double z_end);
+#endif

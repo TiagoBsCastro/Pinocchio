@@ -332,7 +332,8 @@ typedef struct
       CatalogInAscii, DoNotWriteCatalogs, DoNotWriteHistories, WriteTimelessSnapshot,
       OutputInH100, RandomSeed, MaxMem, NumFiles,
       BoxInH100, simpleLambda, AnalyticMassFunction, MinHaloMass, PLCProvideConeData, ExitIfExtraParticles,
-      use_transposed_fft, FixedIC, PairedIC;
+      use_transposed_fft, FixedIC, PairedIC,
+      NumMassPlanes; /* number of mass planes for MASS_MAPS feature (0 disables) */
 #ifdef READ_HUBBLE_TABLE
   char HubbleTableFile[LBLENGTH];
 #endif
@@ -593,6 +594,11 @@ int check_parameters_and_directives(void);
 int write_density(int);
 int write_LPT_snapshot(void);
 int write_timeless_snapshot(void);
+#endif
+
+/* prototypes in write_snapshot.c */
+#ifdef MASS_MAPS
+int write_mass_maps(double, double);
 #endif
 
 /* prototypes for functions defined in cosmo.c */

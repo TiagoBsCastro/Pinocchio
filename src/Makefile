@@ -48,7 +48,11 @@ OPTIONS += -DTHREE_LPT
 
 # PLC reconstruction
 
-# OPTIONS += -DPLC
+OPTIONS += -DPLC
+OPTIONS += -DMASS_MAPS
+OPTIONS += -DMASS_MAPS_DEBUG
+OPTIONS += -DMASS_MAPS_PROFILE
+OPTIONS += -DMASS_MAPS_BISECTION
 
 # Dynamics of triaxial collapse #
 
@@ -221,7 +225,7 @@ endif
 
 OBJECTS = fmax.o variables.o initialization.o collapse_times.o fmax-pfft.o GenIC.o \
 	ReadParamfile.o allocations.o LPT.o distribute.o \
-	fragment.o build_groups.o write_halos.o write_snapshot.o cosmo.o
+	fragment.o build_groups.o write_halos.o write_snapshot.o write_mass_maps.o cosmo.o
 
 # Main targets and rules
 

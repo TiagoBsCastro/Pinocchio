@@ -58,6 +58,7 @@ int read_parameter_file()
   {
 
     nt = 0;
+    int idx_NumMassPlanes = -1; /* track presence to inform user if missing */
 
     /* list of requested parameters */
     strcpy(tag[nt], "RunFlag");
@@ -250,6 +251,11 @@ int read_parameter_file()
     addr[nt] = &(params.use_transposed_fft);
     id[nt++] = LOGICAL;
 
+    /* Optional: number of mass planes for MASS_MAPS feature */
+    strcpy(tag[nt], "NumMassPlanes");
+    addr[nt] = &params.NumMassPlanes;
+    id[nt++] = INT_SKIP_DEF;
+
     strcpy(tag[nt], "MimicOldSeed");
     addr[nt] = &(internal.mimic_original_seedtable);
     id[nt++] = LOGICAL;
@@ -419,6 +425,33 @@ int read_parameter_file()
         }
       }
     }
+
+    /* Extra help for optional MASS_MAPS configuration */
+    /* Find the NumMassPlanes tag index to see if it was provided */
+    for (i = 0; i < nt; i++)
+      if (addr[i] == &params.NumMassPlanes)
+      {
+        idx_NumMassPlanes = i;
+        break;
+      }
+
+    if (idx_NumMassPlanes >= 0 && *tag[idx_NumMassPlanes])
+    {
+      /* Tag missing: silently default to 0 but inform the user clearly */
+      params.NumMassPlanes = 0;
+      printf("Info: parameter 'NumMassPlanes' not found in %s. Defaulting to 0 (mass maps disabled).\n",
+             params.ParameterFile);
+      fflush(stdout);
+    }
+
+#ifdef MASS_MAPS
+    if (params.NumMassPlanes <= 0)
+    {
+      printf("Info: MASS_MAPS is enabled but NumMassPlanes <= 0. No mass maps will be produced.\n");
+      printf("      To enable, add for example:  NumMassPlanes 16  in your parameter file.\n");
+      fflush(stdout);
+    }
+#endif
 
     /* Now opens and reads the list of wanted outputs */
     outputs.n = 0;
