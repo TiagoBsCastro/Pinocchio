@@ -3,10 +3,10 @@
 # run properties
 RunFlag                example      % name of the run
 OutputList             outputs      % output list 
-BoxSize                1800         % physical size of the box in Mpc
+BoxSize                500          % physical size of the box in Mpc
 BoxInH100                           % specify that the box is in Mpc/h
-GridSize               128          % number of grid points per side
-RandomSeed             250693       % random seed for initial conditions
+GridSize               64           % number of grid points per side
+RandomSeed             486604       % random seed for initial conditions
 % FixedIC                           % if present, the modulus in ICs is fixed to the average
 % PairedIC                          % if present, the phase in ICs is shifted by PI
 
@@ -28,7 +28,7 @@ WDM_PartMass_in_kev    0.0          % WDM cut following Bode, Ostriker & Turok (
 
 # control of memory requirements
 BoundaryLayerFactor    3.0          % width of the boundary layer for fragmentation
-MaxMem                 7200         % max available memory to an MPI task in Mbyte
+MaxMem                 3600         % max available memory to an MPI task in Mbyte
 MaxMemPerParticle      300          % max available memory in bytes per particle
 PredPeakFactor         0.8          % guess for the number of peaks in the subvolume
 
@@ -47,14 +47,11 @@ AnalyticMassFunction   9            % form of analytic mass function given in th
 # past light cone
 StartingzForPLC        0.3          % starting (highest) redshift for the past light cone
 LastzForPLC            0.0          % final (lowest) redshift for the past light cone
-PLCAperture            180          % cone aperture for the past light cone
+PLCAperture            30           % cone aperture for the past light cone
 PLCProvideConeData                  % read vertex and direction of cone from paramter file
-PLCCenter 900 900 900               % cone vertex in the same coordinates as the BoxSize
+PLCCenter 250. 250. 250.            % cone vertex in the same coordinates as the BoxSize
 PLCAxis   0. 0. 1.                  % un-normalized direction of the cone axis
 NumMassPlanes          4            % number of mass planes to be constructed
-MassMapNSIDE           512          % NSIDE for healpix mass maps
-MassMapMasterMaxGB     2.0          % Extra memory for master storing the sheet
-
 
 # Table of collapseTime file, needed if the code is compiled with TABULATED_CT
 % CTtableFile  none

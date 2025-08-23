@@ -50,9 +50,8 @@ OPTIONS += -DTHREE_LPT
 
 OPTIONS += -DPLC
 OPTIONS += -DMASS_MAPS
-OPTIONS += -DMASS_MAPS_DEBUG
 OPTIONS += -DMASS_MAPS_PROFILE
-OPTIONS += -DMASS_MAPS_BISECTION
+OPTIONS += -DMASS_MAPS_VALIDATE
 
 # Dynamics of triaxial collapse #
 
@@ -101,6 +100,17 @@ OMP_FLAG =
 OMP_FFTW =
 endif
 
+############## Mass Maps Library ####################
+
+HEALPIX_ROOT ?= /usr
+CFITSIO_ROOT ?= /usr
+
+HEALPIX_INCL = -I$(HEALPIX_ROOT)/include
+HEALPIX_LIBR = -L$(HEALPIX_ROOT)/lib -lchealpix
+
+CFITSIO_INCL = -I$(CFITSIO_ROOT)/include
+CFITSIO_LIBR = -L$(CFITSIO_ROOT)/lib -lcfitsio
+
 ########## System-specific Configuration ############
 
 SYSTYPE ?= "mylaptop"
@@ -120,6 +130,13 @@ MPI_LIBR    =
 MPI_INCL    =
 GSL_LIBR    = -L$(HOME)/lib -lgsl -lgslcblas -lm
 GSL_INCL    = -I$(HOME)/include/gsl
+
+HEALPIX_INCL = -I$(HEALPIX_ROOT)/include
+HEALPIX_LIBR = -L$(HEALPIX_ROOT)/lib -lchealpix
+
+CFITSIO_INCL = -I$(CFITSIO_ROOT)/include
+CFITSIO_LIBR = -L$(CFITSIO_ROOT)/lib -lcfitsio
+
 endif
 
 ###################### BASE ######################
@@ -212,7 +229,15 @@ INC =  $(PFFT_INCL) $(FFTW_INCL) $(MPI_INCL) $(GSL_INCL)
 
 # Library flags #
 
-LIB =  -lm $(PFFT_LIBR) $(FFTW_LIBR) $(MPI_LIBR) $(GSL_LIBR)
+###############################################################
+# HEALPix / CFITSIO configuration (override from environment)
+###############################################################
+
+# Append their include paths
+INC += $(HEALPIX_INCL) $(CFITSIO_INCL)
+
+# Append their libraries (placed after math deps)
+LIB =  -lm $(PFFT_LIBR) $(FFTW_LIBR) $(MPI_LIBR) $(GSL_LIBR) $(CFITSIO_LIBR) $(HEALPIX_LIBR)
 
 # Compiler options : choose from CDEBUG or COPTIMIZED #
 

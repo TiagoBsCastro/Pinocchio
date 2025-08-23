@@ -333,7 +333,9 @@ typedef struct
       OutputInH100, RandomSeed, MaxMem, NumFiles,
       BoxInH100, simpleLambda, AnalyticMassFunction, MinHaloMass, PLCProvideConeData, ExitIfExtraParticles,
       use_transposed_fft, FixedIC, PairedIC,
-      NumMassPlanes; /* number of mass planes for MASS_MAPS feature (0 disables) */
+      NumMassPlanes,         /* number of mass planes for MASS_MAPS feature (0 disables) */
+      MassMapNSIDE;          /* HEALPix NSIDE for MASS_MAPS (0 disables) */
+  double MassMapMasterMaxGB; /* Max GB of memory rank 0 may use for one HEALPix plane (counts array) */
 #ifdef READ_HUBBLE_TABLE
   char HubbleTableFile[LBLENGTH];
 #endif
