@@ -8,223 +8,128 @@
 #error "MASS_MAPS requires PLC"
 #endif
 
-static inline double qglob_to_snapshot(double qglob, int axis)
+/* ------------------------------------------------------------------------- */
+/* Full lattice (products[]) output (production).
+  We always attempt to write ALL particles from the initial lattice using
+  the products[] ordering because PLC mass map reconstruction requires the
+  complete set (ghost layers included). If products[] is unavailable at the
+  time of the call (unexpected late free), we fall back to the owned-only
+  fragmentation view with a warning. */
+
+/* ------------------------- FULL LATTICE (products[]) --------------------- */
+static inline int mass_maps_full_available(void)
 {
-  long off = subbox.start[axis] - MyGrids[0].GSstart[axis];
-  double q = qglob - (double)off;
-  double L = (double)MyGrids[0].GSglobal[axis];
-  if (q >= L)
-    q -= L;
-  else if (q < 0.0)
-    q += L;
-  return q;
+  return (products != NULL && MyGrids[0].total_local_size > 0);
 }
 
-static void dump_core_particle_positions_z0(void)
+static inline void mass_maps_compute_from_products(int idx,
+                                                   unsigned long long *pid,
+                                                   double q[3], double x[3])
 {
-  char fname[LBLENGTH];
-  sprintf(fname, "pinocchio.%s.massmaps.positions.task%05d.out", params.RunFlag, ThisTask);
-  FILE *fp = fopen(fname, "w");
-  if (!fp)
-    return;
-  fprintf(fp, "# particle_id gx gy gz lagx lagy lagz dx dy dz x y z snap_x snap_y snap_z (z=0)\n");
-  int istart = MyGrids[0].GSstart[_x_], jstart = MyGrids[0].GSstart[_y_], kstart = MyGrids[0].GSstart[_z_];
-  int nx = MyGrids[0].GSlocal[_x_], ny = MyGrids[0].GSlocal[_y_], nz = MyGrids[0].GSlocal[_z_];
-  int sx = subbox.safe[_x_], sy = subbox.safe[_y_], sz = subbox.safe[_z_];
-  for (int ii = 0; ii < nx; ++ii)
+  int ibox, jbox, kbox;
+  INDEX_TO_COORD(idx, ibox, jbox, kbox, MyGrids[0].GSlocal);
+  const int Gx = MyGrids[0].GSglobal[_x_];
+  const int Gy = MyGrids[0].GSglobal[_y_];
+  const int Gz = MyGrids[0].GSglobal[_z_];
+  const double dx = params.InterPartDist;
+  int gx = ibox + MyGrids[0].GSstart[_x_];
+  int gy = jbox + MyGrids[0].GSstart[_y_];
+  int gz = kbox + MyGrids[0].GSstart[_z_];
+  *pid = ((unsigned long long)gx * Gy + gy) * Gz + gz + 1ULL;
+  q[0] = gx * dx;
+  q[1] = gy * dx;
+  q[2] = gz * dx;
+  for (int d = 0; d < 3; d++)
   {
-    int i_local = ii + sx;
-    for (int jj = 0; jj < ny; ++jj)
-    {
-      int j_local = jj + sy;
-      for (int kk = 0; kk < nz; ++kk)
-      {
-        int k_local = kk + sz;
-        unsigned int pos = COORD_TO_INDEX(i_local, j_local, k_local, subbox.Lgwbl);
-        long long gx = istart + ii, gy = jstart + jj, gz = kstart + kk;
-        unsigned long long pid = 1ULL + (unsigned long long)COORD_TO_INDEX(gx, gy, gz, MyGrids[0].GSglobal);
-        pos_data tp;
-        set_point(i_local, j_local, k_local, (int)pos, (PRODFLOAT)1.0, &tp);
-        double lag[3] = {(double)gx + SHIFT, (double)gy + SHIFT, (double)gz + SHIFT};
-        double disp[3], epos[3], snap_epos[3];
-        for (int a = 0; a < 3; ++a)
-        {
-          double qloc = q2x(a, &tp, subbox.pbc[a], (double)subbox.Lgwbl[a], ORDER_FOR_CATALOG);
-          double qglob = qloc + subbox.stabl[a];
-          disp[a] = qglob - lag[a];
-          epos[a] = qglob * params.InterPartDist;
-          double snap_q = qglob_to_snapshot(qglob, a);
-          snap_epos[a] = snap_q * params.InterPartDist * (params.OutputInH100 ? params.Hubble100 : 1.0);
-        }
-        fprintf(fp, "%llu %lld %lld %lld %.6g %.6g %.6g %.6g %.6g %.6g %.8g %.8g %.8g %.8g %.8g %.8g\n", pid, gx, gy, gz, lag[0], lag[1], lag[2], disp[0], disp[1], disp[2], epos[0], epos[1], epos[2], snap_epos[0], snap_epos[1], snap_epos[2]);
-      }
-    }
-  }
-  fclose(fp);
-}
-
-static void summarize_core_particle_positions_z0(void)
-{
-  int istart = MyGrids[0].GSstart[_x_], jstart = MyGrids[0].GSstart[_y_], kstart = MyGrids[0].GSstart[_z_];
-  int nx = MyGrids[0].GSlocal[_x_], ny = MyGrids[0].GSlocal[_y_], nz = MyGrids[0].GSlocal[_z_];
-  int sx = subbox.safe[_x_], sy = subbox.safe[_y_], sz = subbox.safe[_z_];
-  double local_sum[3] = {0}, local_sum2[3] = {0};
-  double local_min[3] = {1e300, 1e300, 1e300};
-  double local_max[3] = {-1e300, -1e300, -1e300};
-  uint64_t local_hash = 1469598103934665603ULL;
-  long long local_count = 0, local_nan = 0;
-  for (int ii = 0; ii < nx; ++ii)
-  {
-    int i_local = ii + sx;
-    for (int jj = 0; jj < ny; ++jj)
-    {
-      int j_local = jj + sy;
-      for (int kk = 0; kk < nz; ++kk)
-      {
-        int k_local = kk + sz;
-        unsigned int pos = COORD_TO_INDEX(i_local, j_local, k_local, subbox.Lgwbl);
-        pos_data tp;
-        set_point(i_local, j_local, k_local, (int)pos, (PRODFLOAT)1.0, &tp);
-        double snap_epos[3];
-        int bad = 0;
-        for (int a = 0; a < 3; ++a)
-        {
-          double qglob = q2x(a, &tp, subbox.pbc[a], (double)subbox.Lgwbl[a], ORDER_FOR_CATALOG) + subbox.stabl[a];
-          double snap_q = qglob_to_snapshot(qglob, a);
-          double v = snap_q * params.InterPartDist * (params.OutputInH100 ? params.Hubble100 : 1.0);
-          snap_epos[a] = v;
-          if (!isfinite(v))
-            bad = 1;
-        }
-        if (bad)
-        {
-          local_nan++;
-          continue;
-        }
-        for (int a = 0; a < 3; ++a)
-        {
-          double v = snap_epos[a];
-          local_sum[a] += v;
-          local_sum2[a] += v * v;
-          if (v < local_min[a])
-            local_min[a] = v;
-          if (v > local_max[a])
-            local_max[a] = v;
-          union
-          {
-            double d;
-            uint64_t u;
-          } bits;
-          bits.d = v;
-          local_hash ^= bits.u;
-          local_hash *= 1099511628211ULL;
-        }
-        local_count++;
-      }
-    }
-  }
-  double global_sum[3], global_sum2[3], global_min[3], global_max[3];
-  long long global_count = 0, global_nan = 0;
-  uint64_t recv_hash = 0;
-  MPI_Reduce(local_sum, global_sum, 3, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-  MPI_Reduce(local_sum2, global_sum2, 3, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-  MPI_Reduce(local_min, global_min, 3, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
-  MPI_Reduce(local_max, global_max, 3, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-  MPI_Reduce(&local_count, &global_count, 1, MPI_LONG_LONG_INT, MPI_SUM, 0, MPI_COMM_WORLD);
-  MPI_Reduce(&local_nan, &global_nan, 1, MPI_LONG_LONG_INT, MPI_SUM, 0, MPI_COMM_WORLD);
-  MPI_Reduce(&local_hash, &recv_hash, 1, MPI_UNSIGNED_LONG_LONG, MPI_BXOR, 0, MPI_COMM_WORLD);
-  if (ThisTask == 0)
-  {
-    char fname[LBLENGTH];
-    sprintf(fname, "pinocchio.%s.massmaps.positions.summary.out", params.RunFlag);
-    FILE *fp = fopen(fname, "w");
-    if (fp)
-    {
-      fprintf(fp, "# Summary snapshot-frame positions z=0 run %s\n", params.RunFlag);
-      fprintf(fp, "COUNT %lld\n", global_count);
-      fprintf(fp, "SUM_X %.17g SUM_Y %.17g SUM_Z %.17g\n", global_sum[0], global_sum[1], global_sum[2]);
-      fprintf(fp, "SUM2_X %.17g SUM2_Y %.17g SUM2_Z %.17g\n", global_sum2[0], global_sum2[1], global_sum2[2]);
-      fprintf(fp, "MIN_X %.17g MIN_Y %.17g MIN_Z %.17g\n", global_min[0], global_min[1], global_min[2]);
-      fprintf(fp, "MAX_X %.17g MAX_Y %.17g MAX_Z %.17g\n", global_max[0], global_max[1], global_max[2]);
-      fprintf(fp, "HASH 0x%016llx\n", (unsigned long long)recv_hash);
-      if (global_nan)
-        fprintf(fp, "# WARNING %lld NaN\n", global_nan);
-      fclose(fp);
-    }
+    int g = (d == 0 ? gx : (d == 1 ? gy : gz));
+    double pos = g + SHIFT + products[idx].Vel[d];
+#ifdef TWO_LPT
+    pos += products[idx].Vel_2LPT[d];
+#ifdef THREE_LPT
+    pos += products[idx].Vel_3LPT_1[d] + products[idx].Vel_3LPT_2[d];
+#endif
+#endif
+    int GL = (d == 0 ? Gx : (d == 1 ? Gy : Gz));
+    if (pos >= GL)
+      pos -= GL;
+    if (pos < 0.0)
+      pos += GL;
+    x[d] = pos * dx;
   }
 }
 
-static void summarize_core_particle_lattice(void)
+static int mass_maps_write_products(FILE *file)
 {
-  int istart = MyGrids[0].GSstart[_x_], jstart = MyGrids[0].GSstart[_y_], kstart = MyGrids[0].GSstart[_z_];
-  int nx = MyGrids[0].GSlocal[_x_], ny = MyGrids[0].GSlocal[_y_], nz = MyGrids[0].GSlocal[_z_];
-  double local_sum[3] = {0}, local_sum2[3] = {0};
-  double local_min[3] = {1e300, 1e300, 1e300};
-  double local_max[3] = {-1e300, -1e300, -1e300};
-  uint64_t local_hash = 1469598103934665603ULL;
-  long long local_count = 0;
-  for (int ii = 0; ii < nx; ++ii)
-    for (int jj = 0; jj < ny; ++jj)
-      for (int kk = 0; kk < nz; ++kk)
-      {
-        double epos[3] = {(istart + ii + SHIFT) * params.InterPartDist, (jstart + jj + SHIFT) * params.InterPartDist, (kstart + kk + SHIFT) * params.InterPartDist};
-        for (int a = 0; a < 3; ++a)
-        {
-          double v = epos[a];
-          local_sum[a] += v;
-          local_sum2[a] += v * v;
-          if (v < local_min[a])
-            local_min[a] = v;
-          if (v > local_max[a])
-            local_max[a] = v;
-          union
-          {
-            double d;
-            uint64_t u;
-          } bits;
-          bits.d = v;
-          local_hash ^= bits.u;
-          local_hash *= 1099511628211ULL;
-        }
-        local_count++;
-      }
-  double global_sum[3], global_sum2[3], global_min[3], global_max[3];
-  long long global_count = 0;
-  uint64_t recv_hash = 0;
-  MPI_Reduce(local_sum, global_sum, 3, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-  MPI_Reduce(local_sum2, global_sum2, 3, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-  MPI_Reduce(local_min, global_min, 3, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
-  MPI_Reduce(local_max, global_max, 3, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-  MPI_Reduce(&local_count, &global_count, 1, MPI_LONG_LONG_INT, MPI_SUM, 0, MPI_COMM_WORLD);
-  MPI_Reduce(&local_hash, &recv_hash, 1, MPI_UNSIGNED_LONG_LONG, MPI_BXOR, 0, MPI_COMM_WORLD);
-  if (ThisTask == 0)
+  unsigned long long pid;
+  double q[3], x[3];
+  int count = 0;
+  for (int idx = 0; idx < MyGrids[0].total_local_size; idx++)
   {
-    char fname[LBLENGTH];
-    sprintf(fname, "pinocchio.%s.massmaps.positions.lattice.summary.out", params.RunFlag);
-    FILE *fp = fopen(fname, "w");
-    if (fp)
-    {
-      fprintf(fp, "# Lattice-only core particle positions (no displacement) run %s\n", params.RunFlag);
-      fprintf(fp, "COUNT %lld\n", global_count);
-      fprintf(fp, "SUM_X %.17g SUM_Y %.17g SUM_Z %.17g\n", global_sum[0], global_sum[1], global_sum[2]);
-      fprintf(fp, "SUM2_X %.17g SUM2_Y %.17g SUM2_Z %.17g\n", global_sum2[0], global_sum2[1], global_sum2[2]);
-      fprintf(fp, "MIN_X %.17g MIN_Y %.17g MIN_Z %.17g\n", global_min[0], global_min[1], global_min[2]);
-      fprintf(fp, "MAX_X %.17g MAX_Y %.17g MAX_Z %.17g\n", global_max[0], global_max[1], global_max[2]);
-      fprintf(fp, "HASH 0x%016llx\n", (unsigned long long)recv_hash);
-      fclose(fp);
-    }
+    mass_maps_compute_from_products(idx, &pid, q, x);
+    fprintf(file, "%llu %.8g %.8g %.8g %.8g %.8g %.8g\n", pid, q[0], q[1], q[2], x[0], x[1], x[2]);
+    ++count;
   }
+  return count;
 }
 
+/* ------------------------------------------------------------------------- */
+/* write_mass_maps                                                           */
+/*                                                                           */
+/* Purpose:                                                                  */
+/*   Entry point for MASS_MAPS particle position dump (full lattice mode).   */
+/*   Primary path: write all particles using products[].                     */
+/*   Fallback path: write owned fragmentation particles if products missing. */
+/*                                                                           */
+/* File format (per task):                                                   */
+/*   ASCII, one particle per line:                                           */
+/*     <ID> <q_x> <q_y> <q_z> <x_x> <x_y> <x_z>                              */
+/*   Units: q_* and x_* in length units (params.InterPartDist multiples).    */
+/*                                                                           */
+/* Arguments:                                                                */
+/*   z_start : redshift at which to output (used directly).                  */
+/*   z_end   : (reserved for future interpolation / range outputs).          */
+/*                                                                           */
+/* Returns: 0 on success, >0 on error.                                       */
+/* ------------------------------------------------------------------------- */
 int write_mass_maps(double z_start, double z_end)
 {
-  (void)z_start;
-  (void)z_end;
-  if (ThisTask == 0)
-    printf("[%s] MASS_MAPS: diagnostics-only skeleton (positions + summaries).\n", fdate());
-  dump_core_particle_positions_z0();
-  summarize_core_particle_positions_z0();
-  summarize_core_particle_lattice();
+  (void)z_end;               /* currently unused */
+  double redshift = z_start; /* target redshift for this dump */
+
+  char filename[LBLENGTH];
+  sprintf(filename, "massmaps.%s.z%.4f.task%d.out", params.RunFlag, redshift, ThisTask);
+  FILE *file = fopen(filename, "w");
+  if (!file)
+  {
+    printf("ERROR: Task %d could not open %s for writing\n", ThisTask, filename);
+    return 1;
+  }
+  int nprod_written = 0;
+  int fallback_frag_written = 0;
+  if (mass_maps_full_available())
+  {
+    nprod_written = mass_maps_write_products(file);
+  }
+  else
+  {
+    fprintf(stderr, "ERROR: Task %d MASS_MAPS falling back to fragmentation view (products[] missing)\n", ThisTask);
+    MPI_Abort(MPI_COMM_WORLD, 1);
+  }
+
+  fclose(file);
+  /* Diagnostics */
+  unsigned long long written = (unsigned long long)(nprod_written ? nprod_written : fallback_frag_written);
+  unsigned long long expected_local = (unsigned long long)(nprod_written ? MyGrids[0].total_local_size : subbox.Ngood);
+  if (written != expected_local && internal.verbose_level >= VXX)
+    printf("WARNING: Task %d wrote %llu particles (expected %llu) for mass maps (%s).\n", ThisTask, written, expected_local, (nprod_written ? "full lattice" : "fragment fallback"));
+
+  unsigned long long global_written = 0, global_expected = 0;
+  MPI_Reduce(&written, &global_written, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+  unsigned long long expected_global_local = expected_local; /* each task's expected */
+  MPI_Reduce(&expected_global_local, &global_expected, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+  if (ThisTask == 0 && internal.verbose_level >= VDIAG)
+    printf("[%s] MASS_MAPS: wrote positions at z=%.4f (%s, local=%llu/%llu global=%llu/%llu)\n",
+           fdate(), redshift, (nprod_written ? "full lattice" : "fragment fallback"), written, expected_local, global_written, global_expected);
   return 0;
 }
 

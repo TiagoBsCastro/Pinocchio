@@ -112,7 +112,6 @@ Pinocchio/
     - pk_cb_098.dat
     - pk_cb_099.dat
     - redshifts.dat
-  - log
   - lss.png
   - mf.png
   - outputs
@@ -125,9 +124,28 @@ Pinocchio/
   - pinocchio.1.0000.example.mf.out
   - pinocchio.2.0000.example.catalog.out
   - pinocchio.2.0000.example.mf.out
+  - pinocchio.example-4.cosmology.out
+  - pinocchio.example-4.FmaxPDF.out
+  - pinocchio.example-4.geometry.out
+  - pinocchio.example-4.histories.out
+  - pinocchio.example-4.massmaps.positions.lattice.summary.out
+  - pinocchio.example-4.massmaps.positions.summary.out
+  - pinocchio.example-4.massmaps.positions.task00000.out
+  - pinocchio.example-4.massmaps.positions.task00001.out
+  - pinocchio.example-4.massmaps.positions.task00002.out
+  - pinocchio.example-4.massmaps.positions.task00003.out
+  - pinocchio.example-4.nz.out
+  - pinocchio.example-4.plc.out
+  - pinocchio.example-4.scaledep.out
   - pinocchio.example.cosmology.out
   - pinocchio.example.FmaxPDF.out
+  - pinocchio.example.geometry.out
   - pinocchio.example.histories.out
+  - pinocchio.example.massmaps.positions.lattice.summary.out
+  - pinocchio.example.massmaps.positions.summary.out
+  - pinocchio.example.massmaps.positions.task00000.out
+  - pinocchio.example.nz.out
+  - pinocchio.example.plc.out
   - pinocchio.example.scaledep.out
   - pinocchio.x
   - plc.png
@@ -151,7 +169,10 @@ Pinocchio/
   - pinocchio.x
   - VALIDATION_log.txt
 - scripts/
+  - benchmark_mass_maps.sh
   - HMF_validation.py
+  - outputs
+  - parameter_file
   - Pinocchio2fits.py
   - PkCamb.py
   - PlcGeometryplot_3D.py
@@ -159,30 +180,47 @@ Pinocchio/
   - ValidateFits.py
 - src/
   - allocations.c
+  - allocations.o
   - build_groups.c
+  - build_groups.o
   - collapse_times.c
-  - compile_commands.json
+  - collapse_times.o
   - cosmo.c
+  - cosmo.o
   - def_splines.h
   - distribute.c
+  - distribute.o
   - fmax-fftw.c
   - fmax-pfft.c
+  - fmax-pfft.o
   - fmax.c
+  - fmax.o
   - fragment.c
   - fragment.h
+  - fragment.o
   - GenIC.c
+  - GenIC.o
   - initialization.c
+  - initialization.o
   - LPT.c
+  - LPT.o
   - Makefile
   - pinocchio.c
   - pinocchio.h
+  - pinocchio.o
+  - pinocchio.x
   - Pk_from_CAMB.c
   - ReadParamfile.c
+  - ReadParamfile.o
   - ReadWhiteNoise.c
-  - run_planner.c
   - variables.c
+  - variables.o
   - write_halos.c
+  - write_halos.o
+  - write_mass_maps.c
+  - write_mass_maps.o
   - write_snapshot.c
+  - write_snapshot.o
 - tests/
   - ICs_piti_vs_pinocchio/
     - Cross_PK_and_Residuals_3LPT_with_vel_correction.png
@@ -316,7 +354,10 @@ OPTIONS += -DTHREE_LPT
 
 # PLC reconstruction
 
-# OPTIONS += -DPLC
+OPTIONS += -DPLC
+OPTIONS += -DMASS_MAPS
+OPTIONS += -DMASS_MAPS_PROFILE
+OPTIONS += -DMASS_MAPS_VALIDATE
 
 # Dynamics of triaxial collapse #
 
@@ -365,6 +406,17 @@ OMP_FLAG =
 OMP_FFTW =
 endif
 
+############## Mass Maps Library ####################
+
+HEALPIX_ROOT ?= /usr
+CFITSIO_ROOT ?= /usr
+
+HEALPIX_INCL = -I$(HEALPIX_ROOT)/include
+HEALPIX_LIBR = -L$(HEALPIX_ROOT)/lib -lchealpix
+
+CFITSIO_INCL = -I$(CFITSIO_ROOT)/include
+CFITSIO_LIBR = -L$(CFITSIO_ROOT)/lib -lcfitsio
+
 ########## System-specific Configuration ############
 
 SYSTYPE ?= "mylaptop"
@@ -384,6 +436,13 @@ MPI_LIBR    =
 MPI_INCL    =
 GSL_LIBR    = -L$(HOME)/lib -lgsl -lgslcblas -lm
 GSL_INCL    = -I$(HOME)/include/gsl
+
+HEALPIX_INCL = -I$(HEALPIX_ROOT)/include
+HEALPIX_LIBR = -L$(HEALPIX_ROOT)/lib -lchealpix
+
+CFITSIO_INCL = -I$(CFITSIO_ROOT)/include
+CFITSIO_LIBR = -L$(CFITSIO_ROOT)/lib -lcfitsio
+
 endif
 
 ###################### BASE ######################
@@ -476,7 +535,15 @@ INC =  $(PFFT_INCL) $(FFTW_INCL) $(MPI_INCL) $(GSL_INCL)
 
 # Library flags #
 
-LIB =  -lm $(PFFT_LIBR) $(FFTW_LIBR) $(MPI_LIBR) $(GSL_LIBR)
+###############################################################
+# HEALPix / CFITSIO configuration (override from environment)
+###############################################################
+
+# Append their include paths
+INC += $(HEALPIX_INCL) $(CFITSIO_INCL)
+
+# Append their libraries (placed after math deps)
+LIB =  -lm $(PFFT_LIBR) $(FFTW_LIBR) $(MPI_LIBR) $(GSL_LIBR) $(CFITSIO_LIBR) $(HEALPIX_LIBR)
 
 # Compiler options : choose from CDEBUG or COPTIMIZED #
 
@@ -489,7 +556,7 @@ endif
 
 OBJECTS = fmax.o variables.o initialization.o collapse_times.o fmax-pfft.o GenIC.o \
 	ReadParamfile.o allocations.o LPT.o distribute.o \
-	fragment.o build_groups.o write_halos.o write_snapshot.o cosmo.o
+	fragment.o build_groups.o write_halos.o write_snapshot.o write_mass_maps.o cosmo.o
 
 # Main targets and rules
 
@@ -518,6 +585,181 @@ clean:
 *.o
 .vscode
 */pinocchio.x
+*json
+```
+
+
+----- FILE: context.py -----
+```text
+#!/usr/bin/env python3
+import argparse, os, sys, subprocess, textwrap, unicodedata
+from pathlib import Path
+
+DEFAULT_EXCLUDE_DIRS = {
+    ".git","node_modules","dist","build",".venv","venv","__pycache__",
+    ".tox",".mypy_cache",".pytest_cache",".idea",".vscode",".DS_Store"
+}
+DEFAULT_EXCLUDE_EXT = {
+    ".png",".jpg",".jpeg",".gif",".webp",".svg",".pdf",".zip",".tar",".gz",".bz2",".7z",
+    ".mp3",".wav",".flac",".mp4",".mov",".avi",".mkv",
+    ".exe",".dll",".so",".dylib",".bin",".class",".o",".a",".jar",
+    ".otf",".ttf",".woff",".woff2",".ico",".lock"
+}
+DEFAULT_SECRET_BASENAMES = {
+    ".env","id_rsa","id_ed25519","credentials.json","service-account.json","secret.json",
+    "secrets.json","firebase-service-account.json","google-credentials.json"
+}
+DEFAULT_PRIORITY_FILES = [
+    "README.md","README","README.rst","README.txt",
+    "pyproject.toml","requirements.txt","environment.yml","Pipfile","Pipfile.lock",
+    "package.json","yarn.lock","pnpm-lock.yaml","go.mod","go.sum",
+    "Cargo.toml","Cargo.lock","Gemfile","pom.xml","Makefile","Dockerfile",".env.example"
+]
+
+def is_binary(path: Path, sample_bytes=8192) -> bool:
+    try:
+        with path.open("rb") as f:
+            chunk = f.read(sample_bytes)
+        if b"\x00" in chunk:
+            return True
+        # Heuristic: too many non-text characters
+        text_ratio = sum(32 <= b <= 126 or b in (9,10,13) for b in chunk) / max(1, len(chunk))
+        return text_ratio < 0.80
+    except Exception:
+        return True
+
+def git_ls_files(repo: Path):
+    try:
+        out = subprocess.check_output(["git","ls-files"], cwd=repo, text=True)
+        return [repo / p for p in out.splitlines()]
+    except Exception:
+        # Fallback to walk
+        return [p for p in repo.rglob("*") if p.is_file()]
+
+def within_size_limits(path: Path, max_bytes_per_file: int) -> bool:
+    try:
+        return path.stat().st_size <= max_bytes_per_file
+    except Exception:
+        return False
+
+def looks_texty(path: Path) -> bool:
+    # Allow files without extensions if not binary
+    ext = path.suffix.lower()
+    if ext in DEFAULT_EXCLUDE_EXT:
+        return False
+    return True
+
+def normalize(s: str) -> str:
+    s = unicodedata.normalize("NFKC", s)
+    # Strip trailing spaces to save tokens
+    return "\n".join(line.rstrip() for line in s.splitlines())
+
+def read_head(path: Path, max_lines: int) -> str:
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            lines = []
+            for i, line in enumerate(f, 1):
+                lines.append(line)
+                if i >= max_lines:
+                    break
+        return normalize("".join(lines))
+    except Exception as e:
+        return f"[Could not read file: {e}]"
+
+def main():
+    ap = argparse.ArgumentParser(description="Build a compact context.md from a repo.")
+    ap.add_argument("--repo", default=".", help="Path to repo root")
+    ap.add_argument("--out", default="context.md", help="Output file")
+    ap.add_argument("--max-lines-per-file", type=int, default=400)
+    ap.add_argument("--max-bytes-per-file", type=int, default=200_000)
+    ap.add_argument("--max-total-bytes", type=int, default=5_000_000)
+    ap.add_argument("--depth", type=int, default=3, help="Tree depth")
+    args = ap.parse_args()
+
+    root = Path(args.repo).resolve()
+    files = git_ls_files(root)
+
+    # Filter
+    candidates = []
+    for p in files:
+        rel = p.relative_to(root)
+        parts = set(rel.parts)
+        if any(d in parts for d in DEFAULT_EXCLUDE_DIRS):
+            continue
+        if p.name in DEFAULT_SECRET_BASENAMES:
+            continue
+        if not looks_texty(p):
+            continue
+        if is_binary(p):
+            continue
+        if not within_size_limits(p, args.max_bytes_per_file):
+            continue
+        candidates.append(p)
+
+    # Put priority files first
+    priority = []
+    others = []
+    priority_names = set(DEFAULT_PRIORITY_FILES)
+    for p in candidates:
+        if p.name in priority_names or str(p.relative_to(root)) in DEFAULT_PRIORITY_FILES:
+            priority.append(p)
+        else:
+            others.append(p)
+    ordered = priority + sorted(others, key=lambda x: str(x).lower())
+
+    # Build header
+    def make_tree(root: Path, depth: int) -> str:
+        lines = []
+        def walk(base: Path, level: int):
+            if level > depth:
+                return
+            entries = sorted([p for p in base.iterdir() if p.name not in DEFAULT_EXCLUDE_DIRS], key=lambda x: (x.is_file(), x.name.lower()))
+            for e in entries:
+                indent = "  " * (level - 1)
+                lines.append(f"{indent}- {e.name}{'/' if e.is_dir() else ''}")
+                if e.is_dir():
+                    walk(e, level + 1)
+        lines.append(f"{root.name}/")
+        walk(root, 1)
+        return "\n".join(lines)
+
+    header = [
+        "# Repository context for LLM",
+        "",
+        "## How this was built",
+        "- Files are text only and truncated to a head limit.",
+        "- Common binary and build artifacts are excluded.",
+        "- Likely secret files are excluded.",
+        "",
+        "## Directory tree (truncated)",
+        "```",
+        make_tree(root, args.depth),
+        "```",
+        ""
+    ]
+
+    total_bytes = sum(len(s)+1 for s in header)
+    chunks = ["\n".join(header)]
+
+    for p in ordered:
+        if ("/tests/" in str(p)) or ("/CAMBFiles/" in str(p)) or (".example." in str(p)) or ("HMF_Validation" in str(p)) or ("example/log" in str(p)):
+            continue
+        rel = str(p.relative_to(root))
+        body = read_head(p, args.max_lines_per_file)
+        block = f"\n\n----- FILE: {rel} -----\n```text\n{body}\n```"
+        b = len(block.encode("utf-8"))
+        if total_bytes + b > args.max_total_bytes:
+            chunks.append("\n\n[Truncated due to max_total_bytes limit]\n")
+            break
+        chunks.append(block)
+        total_bytes += b
+
+    out = "\n".join(chunks)
+    Path(args.out).write_text(out, encoding="utf-8")
+    print(f"Wrote {args.out} ({total_bytes} bytes)")
+
+if __name__ == "__main__":
+    main()
 ```
 
 
@@ -1325,10 +1567,10 @@ specified in the Makefile.
 # run properties
 RunFlag                example      % name of the run
 OutputList             outputs      % output list
-BoxSize                500          % physical size of the box in Mpc
+BoxSize                1800         % physical size of the box in Mpc
 BoxInH100                           % specify that the box is in Mpc/h
 GridSize               128          % number of grid points per side
-RandomSeed             486604       % random seed for initial conditions
+RandomSeed             250693       % random seed for initial conditions
 % FixedIC                           % if present, the modulus in ICs is fixed to the average
 % PairedIC                          % if present, the phase in ICs is shifted by PI
 
@@ -1350,7 +1592,7 @@ WDM_PartMass_in_kev    0.0          % WDM cut following Bode, Ostriker & Turok (
 
 # control of memory requirements
 BoundaryLayerFactor    3.0          % width of the boundary layer for fragmentation
-MaxMem                 3600         % max available memory to an MPI task in Mbyte
+MaxMem                 7200         % max available memory to an MPI task in Mbyte
 MaxMemPerParticle      300          % max available memory in bytes per particle
 PredPeakFactor         0.8          % guess for the number of peaks in the subvolume
 
@@ -1369,10 +1611,14 @@ AnalyticMassFunction   9            % form of analytic mass function given in th
 # past light cone
 StartingzForPLC        0.3          % starting (highest) redshift for the past light cone
 LastzForPLC            0.0          % final (lowest) redshift for the past light cone
-PLCAperture            30           % cone aperture for the past light cone
+PLCAperture            180          % cone aperture for the past light cone
 PLCProvideConeData                  % read vertex and direction of cone from paramter file
-PLCCenter 0. 0. 0.                  % cone vertex in the same coordinates as the BoxSize
-PLCAxis   1. 1. 0.                  % un-normalized direction of the cone axis
+PLCCenter 900 900 900               % cone vertex in the same coordinates as the BoxSize
+PLCAxis   0. 0. 1.                  % un-normalized direction of the cone axis
+NumMassPlanes          4            % number of mass planes to be constructed
+MassMapNSIDE           512          % NSIDE for healpix mass maps
+MassMapMasterMaxGB     2.0          % Extra memory for master storing the sheet
+
 
 # Table of collapseTime file, needed if the code is compiled with TABULATED_CT
 % CTtableFile  none
@@ -1969,6 +2215,135 @@ Public License instead of this License.
 ```
 
 
+----- FILE: scripts/benchmark_mass_maps.sh -----
+```text
+#!/usr/bin/env bash
+# Automated benchmark for MASS_MAPS solver variants (Brent vs Bisection)
+# Usage (from src directory):
+#   ../scripts/benchmark_mass_maps.sh <paramfile> "mpirun -np 4" [--decide] [--threshold 0.03]
+#
+# ENV / Flags:
+#   MASS_MAPS_NUM_RUNS   Number of repetitions (default 3)
+#   MASS_MAPS_SOLVERS    Space separated list (default "BRENT BISECTION")
+#   --decide             Emit recommendation & optional patch suggestion
+#   --threshold <frac>   Relative total-time advantage needed to keep slower path (default 0.03 = 3%)
+#
+# Output:
+#   profiling_<SOLVER>.txt  concatenated profiling sections per run
+#   profiling_summary.tsv   tab-separated summary of averages
+#   Recommendation printed if --decide specified.
+
+set -euo pipefail
+
+if [ $# -lt 2 ]; then
+  echo "Usage: $0 <paramfile> <mpirun command (quoted)> [--decide] [--threshold 0.03]" >&2
+  exit 1
+fi
+
+PARAMFILE=$1; shift
+MPICMD=$1; shift
+DECIDE=0
+THRESH=0.03
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --decide) DECIDE=1; shift ;;
+    --threshold) THRESH=$2; shift 2 ;;
+    *) echo "Unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+REPS=${MASS_MAPS_NUM_RUNS:-3}
+SOLVERS=${MASS_MAPS_SOLVERS:-"BRENT BISECTION"}
+
+if [ ! -f "$PARAMFILE" ]; then
+  echo "Parameter file not found: $PARAMFILE" >&2
+  exit 3
+fi
+
+run_case() { # solver label
+  local solver=$1
+  echo "==== Solver: ${solver} ===="
+  make clean >/dev/null 2>&1 || true
+  if [ "$solver" = "BISECTION" ]; then
+    make pinocchio MASS_MAPS_SOLVER=BISECTION >/dev/null
+  else
+    make pinocchio >/dev/null
+  fi
+  local total=0
+  local outfile="profiling_${solver}.txt"
+  : > "$outfile"
+  for r in $(seq 1 $REPS); do
+    echo "-- Run $r/$REPS" >&2
+    $MPICMD ./pinocchio.x $PARAMFILE 2>&1 | tee run_${solver}_$r.log | awk '/Mass maps:/{flag=1} flag{print}' >> "$outfile" || true
+  done
+  echo "Captured profiling in $outfile"
+  echo
+}
+
+for s in $SOLVERS; do
+  run_case "$s"
+done
+
+echo "Summary (average of Total and key buckets)" | tee profiling_summary.tsv
+awk '/Total \(avg\)/{t=$3} /Scan condition/ {scan=$3} /Solver condition/ {solc=$3} /Solver overhead/ {solo=$3} /Bracket:/ {br=$3} /Counts:/{print FILENAME, t, scan, solc, solo, br}' profiling_*.txt | \
+  awk -v out=profiling_summary.tsv 'BEGIN{hdr="solver\tTotal\tScan\tSolCond\tSolOvh\tBracket";print hdr >> out;printf("%-18s %8s %8s %8s %8s %8s\n","solver","Total","Scan","SolCond","SolOvh","Bracket");}
+  {cnt[$1]++;T[$1]+=$2;SC[$1]+=$3;SO[$1]+=$4;SH[$1]+=$5;BR[$1]+=$6;}
+  END{for(f in T){at=T[f]/cnt[f];asc=SC[f]/cnt[f];aso=SO[f]/cnt[f];ash=SH[f]/cnt[f];abr=BR[f]/cnt[f];printf("%-18s %8.4f %8.4f %8.4f %8.4f %8.4f\n",f,at,asc,aso,ash,abr);
+      gsub("profiling_","",f); gsub(".txt","",f);printf("%s\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\n",f,at,asc,aso,ash,abr)>>out;}}'
+
+if [ $DECIDE -eq 1 ]; then
+  # Extract totals from TSV (expect exactly two rows, else just skip decision)
+  mapfile -t rows < <(tail -n +2 profiling_summary.tsv)
+  if [ ${#rows[@]} -ge 2 ]; then
+    # Pick the smallest total
+    bestSolver=""; bestTotal=1e99
+    declare -A totals
+    for r in "${rows[@]}"; do
+      s=$(echo "$r" | awk '{print $1}')
+      tot=$(echo "$r" | awk '{print $2}')
+      totals[$s]=$tot
+      awk -v s=$s -v tot=$tot -v best=$bestTotal 'END{}' >/dev/null
+      if awk -v a=$tot -v b=$bestTotal 'BEGIN{exit !(a<b)}'; then
+        bestSolver=$s; bestTotal=$tot
+      fi
+    done
+    echo "Decision threshold (relative): $THRESH"
+    for s in "${!totals[@]}"; do
+      echo "  Total[$s] = ${totals[$s]}"
+    done
+    # Compare best against others
+    keepBoth=0
+    for s in "${!totals[@]}"; do
+      [ "$s" = "$bestSolver" ] && continue
+      rel=$(awk -v a=${totals[$s]} -v b=$bestTotal 'BEGIN{print (a/b)-1.0}')
+      echo "  Relative overhead of $s vs $bestSolver: $(printf '%.2f' $(echo $rel))"
+      if awk -v r=$rel -v th=$THRESH 'BEGIN{exit !(r<th)}'; then
+        : # fine
+      else
+        keepBoth=1
+      fi
+    done
+    if [ $keepBoth -eq 0 ]; then
+      echo "Recommendation: keep ONLY solver '$bestSolver' (others slower by > threshold)." | tee -a profiling_summary.tsv
+      echo "To remove the alternative from code: delete its #ifdef path and simplify build (manual step)." | tee -a profiling_summary.tsv
+    else
+      echo "Recommendation: performance differences < threshold; you may drop either for simplicity (default: keep BRENT)." | tee -a profiling_summary.tsv
+    fi
+  else
+    echo "Decision: insufficient data (need >=2 solvers)." | tee -a profiling_summary.tsv
+  fi
+fi
+
+if [ $DECIDE -eq 0 ]; then
+  cat <<EOF
+Next steps:
+- Inspect profiling_*.txt for detailed bucket breakdowns.
+- (Optional) re-run with --decide to print a recommendation.
+EOF
+fi
+```
+
+
 ----- FILE: scripts/HMF_validation.py -----
 ```text
 """
@@ -2371,6 +2746,88 @@ def main():
     print("\nPreprocessor Flags:")
     for flag, enabled in PREPROCESSOR_FLAGS.items():
         print(f"  {flag}: {enabled}")
+```
+
+
+----- FILE: scripts/outputs -----
+```text
+# This file contains the list of output redshifts, in chronological
+# (i.e. descending) order. The last value is the final redshift of the
+# run.  The past-light cone is NOT generated using these outputs but
+# is computed with continuous time sampling.
+
+2.0
+1.0
+0.5
+0.0
+
+```
+
+
+----- FILE: scripts/parameter_file -----
+```text
+# This is an example parameter file for the Pinocchio 5.1 code
+
+# run properties
+RunFlag                example      % name of the run
+OutputList             outputs      % output list
+BoxSize                500          % physical size of the box in Mpc
+BoxInH100                           % specify that the box is in Mpc/h
+GridSize               64           % number of grid points per side
+RandomSeed             486604       % random seed for initial conditions
+% FixedIC                           % if present, the modulus in ICs is fixed to the average
+% PairedIC                          % if present, the phase in ICs is shifted by PI
+
+# cosmology
+Omega0                 0.3110       % Omega_0 (CDM + Baryons)
+OmegaLambda            0.6890       % Omega_Lambda
+OmegaBaryon            0.0489       % Omega_b (baryonic matter)
+Hubble100              0.6766       % little h
+Sigma8                 0.0          % sigma8; if 0, it is computed from the provided P(k)
+PrimordialIndex        0            % n_s
+DEw0                   -1.0         % w0 of parametric dark energy equation of state
+DEwa                   0.0          % wa of parametric dark energy equation of state
+TabulatedEoSfile       no           % equation of state of dark energy tabulated in a file
+FileWithInputSpectrum  CAMBTable
+
+# from N-GenIC
+InputSpectrum_UnitLength_in_cm 0    % units of tabulated P(k), or 0 if it is in h/Mpc
+WDM_PartMass_in_kev    0.0          % WDM cut following Bode, Ostriker & Turok (2001)
+
+# control of memory requirements
+BoundaryLayerFactor    3.0          % width of the boundary layer for fragmentation
+MaxMem                 3600         % max available memory to an MPI task in Mbyte
+MaxMemPerParticle      300          % max available memory in bytes per particle
+PredPeakFactor         0.8          % guess for the number of peaks in the subvolume
+
+# output
+CatalogInAscii                      % catalogs are written in ascii and not in binary format
+OutputInH100                        % units are in H=100 instead of the true H value
+NumFiles               1            % number of files in which each catalog is written
+MinHaloMass            10           % smallest halo that is given in output
+AnalyticMassFunction   9            % form of analytic mass function given in the .mf.out files
+
+# output options:
+% WriteTimelessSnapshot             % writes a Gadget2 snapshot as an output
+% DoNotWriteCatalogs                % skips the writing of full catalogs (including PLC)
+% DoNotWriteHistories               % skips the writing of merger histories
+
+# past light cone
+StartingzForPLC        0.3          % starting (highest) redshift for the past light cone
+LastzForPLC            0.0          % final (lowest) redshift for the past light cone
+PLCAperture            30           % cone aperture for the past light cone
+PLCProvideConeData                  % read vertex and direction of cone from paramter file
+PLCCenter 250. 250. 250.            % cone vertex in the same coordinates as the BoxSize
+PLCAxis   0. 0. 1.                  % un-normalized direction of the cone axis
+NumMassPlanes          4            % number of mass planes to be constructed
+
+# Table of collapseTime file, needed if the code is compiled with TABULATED_CT
+% CTtableFile  none
+
+# CAMB PK tables, needed if the code is compiled with READ_PK_TABLE
+CAMBMatterFile      CAMBFiles/pk_cb         % label for matter power spectrum files (CDM+Baryons)
+CAMBRedshiftsFile   CAMBFiles/redshifts.dat % list of redshifts for the Pk table
+HubbleTableFile     CAMBFiles/hubble.dat    % Hubble table file
 ```
 
 
@@ -5109,397 +5566,6 @@ inline double  ell_sng(int ismooth, double l1, double l2, double l3) {
 ```
 
 
------ FILE: src/compile_commands.json -----
-```text
-[
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-I/home/tcastro/include",
-      "-I/usr/include",
-      "-I/home/tcastro/include/gsl",
-      "-O3",
-      "-Wno-unused-result",
-      "-DTWO_LPT",
-      "-DTHREE_LPT",
-      "-DPLC",
-      "-DELL_CLASSIC",
-      "-DSCALE_DEPENDENT",
-      "-DREAD_PK_TABLE",
-      "-DONLY_MATTER_POWER",
-      "-DRECOMPUTE_DISPLACEMENTS",
-      "-c",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi",
-      "fmax.c"
-    ],
-    "directory": "/home/tcastro/Pinocchio/src",
-    "file": "/home/tcastro/Pinocchio/src/fmax.c"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-I/home/tcastro/include",
-      "-I/usr/include",
-      "-I/home/tcastro/include/gsl",
-      "-O3",
-      "-Wno-unused-result",
-      "-DTWO_LPT",
-      "-DTHREE_LPT",
-      "-DPLC",
-      "-DELL_CLASSIC",
-      "-DSCALE_DEPENDENT",
-      "-DREAD_PK_TABLE",
-      "-DONLY_MATTER_POWER",
-      "-DRECOMPUTE_DISPLACEMENTS",
-      "-c",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi",
-      "variables.c"
-    ],
-    "directory": "/home/tcastro/Pinocchio/src",
-    "file": "/home/tcastro/Pinocchio/src/variables.c"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-I/home/tcastro/include",
-      "-I/usr/include",
-      "-I/home/tcastro/include/gsl",
-      "-O3",
-      "-Wno-unused-result",
-      "-DTWO_LPT",
-      "-DTHREE_LPT",
-      "-DPLC",
-      "-DELL_CLASSIC",
-      "-DSCALE_DEPENDENT",
-      "-DREAD_PK_TABLE",
-      "-DONLY_MATTER_POWER",
-      "-DRECOMPUTE_DISPLACEMENTS",
-      "-c",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi",
-      "initialization.c"
-    ],
-    "directory": "/home/tcastro/Pinocchio/src",
-    "file": "/home/tcastro/Pinocchio/src/initialization.c"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-I/home/tcastro/include",
-      "-I/usr/include",
-      "-I/home/tcastro/include/gsl",
-      "-O3",
-      "-Wno-unused-result",
-      "-DTWO_LPT",
-      "-DTHREE_LPT",
-      "-DPLC",
-      "-DELL_CLASSIC",
-      "-DSCALE_DEPENDENT",
-      "-DREAD_PK_TABLE",
-      "-DONLY_MATTER_POWER",
-      "-DRECOMPUTE_DISPLACEMENTS",
-      "-c",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi",
-      "collapse_times.c"
-    ],
-    "directory": "/home/tcastro/Pinocchio/src",
-    "file": "/home/tcastro/Pinocchio/src/collapse_times.c"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-I/home/tcastro/include",
-      "-I/usr/include",
-      "-I/home/tcastro/include/gsl",
-      "-O3",
-      "-Wno-unused-result",
-      "-DTWO_LPT",
-      "-DTHREE_LPT",
-      "-DPLC",
-      "-DELL_CLASSIC",
-      "-DSCALE_DEPENDENT",
-      "-DREAD_PK_TABLE",
-      "-DONLY_MATTER_POWER",
-      "-DRECOMPUTE_DISPLACEMENTS",
-      "-c",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi",
-      "fmax-pfft.c"
-    ],
-    "directory": "/home/tcastro/Pinocchio/src",
-    "file": "/home/tcastro/Pinocchio/src/fmax-pfft.c"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-I/home/tcastro/include",
-      "-I/usr/include",
-      "-I/home/tcastro/include/gsl",
-      "-O3",
-      "-Wno-unused-result",
-      "-DTWO_LPT",
-      "-DTHREE_LPT",
-      "-DPLC",
-      "-DELL_CLASSIC",
-      "-DSCALE_DEPENDENT",
-      "-DREAD_PK_TABLE",
-      "-DONLY_MATTER_POWER",
-      "-DRECOMPUTE_DISPLACEMENTS",
-      "-c",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi",
-      "GenIC.c"
-    ],
-    "directory": "/home/tcastro/Pinocchio/src",
-    "file": "/home/tcastro/Pinocchio/src/GenIC.c"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-I/home/tcastro/include",
-      "-I/usr/include",
-      "-I/home/tcastro/include/gsl",
-      "-O3",
-      "-Wno-unused-result",
-      "-DTWO_LPT",
-      "-DTHREE_LPT",
-      "-DPLC",
-      "-DELL_CLASSIC",
-      "-DSCALE_DEPENDENT",
-      "-DREAD_PK_TABLE",
-      "-DONLY_MATTER_POWER",
-      "-DRECOMPUTE_DISPLACEMENTS",
-      "-c",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi",
-      "ReadParamfile.c"
-    ],
-    "directory": "/home/tcastro/Pinocchio/src",
-    "file": "/home/tcastro/Pinocchio/src/ReadParamfile.c"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-I/home/tcastro/include",
-      "-I/usr/include",
-      "-I/home/tcastro/include/gsl",
-      "-O3",
-      "-Wno-unused-result",
-      "-DTWO_LPT",
-      "-DTHREE_LPT",
-      "-DPLC",
-      "-DELL_CLASSIC",
-      "-DSCALE_DEPENDENT",
-      "-DREAD_PK_TABLE",
-      "-DONLY_MATTER_POWER",
-      "-DRECOMPUTE_DISPLACEMENTS",
-      "-c",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi",
-      "allocations.c"
-    ],
-    "directory": "/home/tcastro/Pinocchio/src",
-    "file": "/home/tcastro/Pinocchio/src/allocations.c"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-I/home/tcastro/include",
-      "-I/usr/include",
-      "-I/home/tcastro/include/gsl",
-      "-O3",
-      "-Wno-unused-result",
-      "-DTWO_LPT",
-      "-DTHREE_LPT",
-      "-DPLC",
-      "-DELL_CLASSIC",
-      "-DSCALE_DEPENDENT",
-      "-DREAD_PK_TABLE",
-      "-DONLY_MATTER_POWER",
-      "-DRECOMPUTE_DISPLACEMENTS",
-      "-c",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi",
-      "LPT.c"
-    ],
-    "directory": "/home/tcastro/Pinocchio/src",
-    "file": "/home/tcastro/Pinocchio/src/LPT.c"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-I/home/tcastro/include",
-      "-I/usr/include",
-      "-I/home/tcastro/include/gsl",
-      "-O3",
-      "-Wno-unused-result",
-      "-DTWO_LPT",
-      "-DTHREE_LPT",
-      "-DPLC",
-      "-DELL_CLASSIC",
-      "-DSCALE_DEPENDENT",
-      "-DREAD_PK_TABLE",
-      "-DONLY_MATTER_POWER",
-      "-DRECOMPUTE_DISPLACEMENTS",
-      "-c",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi",
-      "distribute.c"
-    ],
-    "directory": "/home/tcastro/Pinocchio/src",
-    "file": "/home/tcastro/Pinocchio/src/distribute.c"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-I/home/tcastro/include",
-      "-I/usr/include",
-      "-I/home/tcastro/include/gsl",
-      "-O3",
-      "-Wno-unused-result",
-      "-DTWO_LPT",
-      "-DTHREE_LPT",
-      "-DPLC",
-      "-DELL_CLASSIC",
-      "-DSCALE_DEPENDENT",
-      "-DREAD_PK_TABLE",
-      "-DONLY_MATTER_POWER",
-      "-DRECOMPUTE_DISPLACEMENTS",
-      "-c",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi",
-      "fragment.c"
-    ],
-    "directory": "/home/tcastro/Pinocchio/src",
-    "file": "/home/tcastro/Pinocchio/src/fragment.c"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-I/home/tcastro/include",
-      "-I/usr/include",
-      "-I/home/tcastro/include/gsl",
-      "-O3",
-      "-Wno-unused-result",
-      "-DTWO_LPT",
-      "-DTHREE_LPT",
-      "-DPLC",
-      "-DELL_CLASSIC",
-      "-DSCALE_DEPENDENT",
-      "-DREAD_PK_TABLE",
-      "-DONLY_MATTER_POWER",
-      "-DRECOMPUTE_DISPLACEMENTS",
-      "-c",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi",
-      "build_groups.c"
-    ],
-    "directory": "/home/tcastro/Pinocchio/src",
-    "file": "/home/tcastro/Pinocchio/src/build_groups.c"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-I/home/tcastro/include",
-      "-I/usr/include",
-      "-I/home/tcastro/include/gsl",
-      "-O3",
-      "-Wno-unused-result",
-      "-DTWO_LPT",
-      "-DTHREE_LPT",
-      "-DPLC",
-      "-DELL_CLASSIC",
-      "-DSCALE_DEPENDENT",
-      "-DREAD_PK_TABLE",
-      "-DONLY_MATTER_POWER",
-      "-DRECOMPUTE_DISPLACEMENTS",
-      "-c",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi",
-      "write_halos.c"
-    ],
-    "directory": "/home/tcastro/Pinocchio/src",
-    "file": "/home/tcastro/Pinocchio/src/write_halos.c"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-I/home/tcastro/include",
-      "-I/usr/include",
-      "-I/home/tcastro/include/gsl",
-      "-O3",
-      "-Wno-unused-result",
-      "-DTWO_LPT",
-      "-DTHREE_LPT",
-      "-DPLC",
-      "-DELL_CLASSIC",
-      "-DSCALE_DEPENDENT",
-      "-DREAD_PK_TABLE",
-      "-DONLY_MATTER_POWER",
-      "-DRECOMPUTE_DISPLACEMENTS",
-      "-c",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi",
-      "write_snapshot.c"
-    ],
-    "directory": "/home/tcastro/Pinocchio/src",
-    "file": "/home/tcastro/Pinocchio/src/write_snapshot.c"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-I/home/tcastro/include",
-      "-I/usr/include",
-      "-I/home/tcastro/include/gsl",
-      "-O3",
-      "-Wno-unused-result",
-      "-DTWO_LPT",
-      "-DTHREE_LPT",
-      "-DPLC",
-      "-DELL_CLASSIC",
-      "-DSCALE_DEPENDENT",
-      "-DREAD_PK_TABLE",
-      "-DONLY_MATTER_POWER",
-      "-DRECOMPUTE_DISPLACEMENTS",
-      "-c",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi",
-      "cosmo.c"
-    ],
-    "directory": "/home/tcastro/Pinocchio/src",
-    "file": "/home/tcastro/Pinocchio/src/cosmo.c"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-I/home/tcastro/include",
-      "-I/usr/include",
-      "-I/home/tcastro/include/gsl",
-      "-O3",
-      "-Wno-unused-result",
-      "-DTWO_LPT",
-      "-DTHREE_LPT",
-      "-DPLC",
-      "-DELL_CLASSIC",
-      "-DSCALE_DEPENDENT",
-      "-DREAD_PK_TABLE",
-      "-DONLY_MATTER_POWER",
-      "-DRECOMPUTE_DISPLACEMENTS",
-      "-c",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include",
-      "-I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi",
-      "pinocchio.c"
-    ],
-    "directory": "/home/tcastro/Pinocchio/src",
-    "file": "/home/tcastro/Pinocchio/src/pinocchio.c"
-  }
-]
-```
-
-
 ----- FILE: src/cosmo.c -----
 ```text
 /*****************************************************************
@@ -8031,6 +8097,10 @@ int compute_mf(int);
 #ifdef PLC
 int write_PLC();
 #endif
+
+#ifdef MASS_MAPS
+int write_mass_maps(double z_start, double z_end);
+#endif
 ```
 
 
@@ -9720,7 +9790,10 @@ typedef struct
       CatalogInAscii, DoNotWriteCatalogs, DoNotWriteHistories, WriteTimelessSnapshot,
       OutputInH100, RandomSeed, MaxMem, NumFiles,
       BoxInH100, simpleLambda, AnalyticMassFunction, MinHaloMass, PLCProvideConeData, ExitIfExtraParticles,
-      use_transposed_fft, FixedIC, PairedIC;
+      use_transposed_fft, FixedIC, PairedIC,
+      NumMassPlanes,         /* number of mass planes for MASS_MAPS feature (0 disables) */
+      MassMapNSIDE;          /* HEALPix NSIDE for MASS_MAPS (0 disables) */
+  double MassMapMasterMaxGB; /* Max GB of memory rank 0 may use for one HEALPix plane (counts array) */
 #ifdef READ_HUBBLE_TABLE
   char HubbleTableFile[LBLENGTH];
 #endif
@@ -9783,9 +9856,6 @@ typedef struct
   PRODFLOAT Vel_2LPT_prev[3];
 #ifdef THREE_LPT
   PRODFLOAT Vel_3LPT_1_prev[3], Vel_3LPT_2_prev[3];
-#endif
-#endif
-#endif
 ```
 
 
@@ -10256,6 +10326,9 @@ int read_parameter_file()
   {
 
     nt = 0;
+    int idx_NumMassPlanes = -1; /* track presence to inform user if missing */
+    int idx_MassMapNSIDE = -1;
+    int idx_MassMapMasterMaxGB = -1;
 
     /* list of requested parameters */
     strcpy(tag[nt], "RunFlag");
@@ -10448,6 +10521,20 @@ int read_parameter_file()
     addr[nt] = &(params.use_transposed_fft);
     id[nt++] = LOGICAL;
 
+    /* Optional: number of mass planes for MASS_MAPS feature */
+    strcpy(tag[nt], "NumMassPlanes");
+    addr[nt] = &params.NumMassPlanes;
+    id[nt++] = INT_SKIP_DEF;
+
+    /* HEALPix mass map parameters */
+    strcpy(tag[nt], "MassMapNSIDE");
+    addr[nt] = &params.MassMapNSIDE;
+    id[nt++] = INT_SKIP_DEF;
+
+    strcpy(tag[nt], "MassMapMasterMaxGB");
+    addr[nt] = &params.MassMapMasterMaxGB;
+    id[nt++] = DOUBLE;
+
     strcpy(tag[nt], "MimicOldSeed");
     addr[nt] = &(internal.mimic_original_seedtable);
     id[nt++] = LOGICAL;
@@ -10579,23 +10666,6 @@ int read_parameter_file()
           }
 
           if (j < 0)
-          {
-            printf("ERROR on task 0: file %s, Tag %s has no argument.\n",
-                   params.ParameterFile, buf1);
-            fflush(stdout);
-            return 1;
-          }
-        }
-        else
-        {
-          printf("ERROR on task 0: file %s, Tag %s is unknown.\n",
-                 params.ParameterFile, buf1);
-          fflush(stdout);
-          return 1;
-        }
-      }
-      fclose(fd);
-    }
 ```
 
 
@@ -10829,411 +10899,6 @@ int read_white_noise()
 }
 
 #endif
-```
-
-
------ FILE: src/run_planner.c -----
-```text
-/*****************************************************************
- *                        PINOCCHIO  V5.1                        *
- *  (PINpointing Orbit-Crossing Collapsed HIerarchical Objects)  *
- *****************************************************************
-
- This code was written by
- Pierluigi Monaco, Tom Theuns, Giuliano Taffoni, Marius Lepinzan,
- Chiara Moretti, Luca Tornatore, David Goz, Tiago Castro
- Copyright (C) 2025
-
- github: https://github.com/pigimonaco/Pinocchio
- web page: http://adlibitum.oats.inaf.it/monaco/pinocchio.html
-
- This program is free software; you can redistribute it and/or modify
- it under the terms of the GNU General Public License as published by
- the Free Software Foundation; either version 2 of the License, or
- (at your option) any later version.
-
- This program is distributed in the hope that it will be useful,
- but WITHOUT ANY WARRANTY; without even the implied warranty of
- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- GNU General Public License for more details.
-
- You should have received a copy of the GNU General Public License
- along with this program; if not, write to the Free Software
- Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-*/
-
-
-#include "pinocchio.h"
-#include "def_splines.h"
-
-#define MARGIN 1.0
-#define MAXCOUNT 10
-
-void abort_code(void);
-
-/*
-   Order-of-magnitude estimate of the needed overhead:
-   sigma < 6 : overhead = (sigma/6)**2   * 3.8 * 1.1 (margin)
-   sigma > 6 : overhead = (sigma/6)**0.6 * 3.8 * 1.1 (margin)
-*/
-
-int main(int argc, char **argv, char **envp)
-{
-
-  /* Initialize MPI */
-  int got_level;
-  MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &got_level);
-  MPI_Comm_rank(MPI_COMM_WORLD, &ThisTask);
-  MPI_Comm_size(MPI_COMM_WORLD, &NTasks);
-
-#ifdef _OPENMP
-  /* initialization of OpemMP */
-#pragma omp parallel
-  {
-#pragma omp master
-    internal.nthreads_omp = omp_get_num_threads();
-  }
-#endif
-
-
-  if (NTasks>1)
-    {
-      printf("Please run this code in a scalar mode, on 1 task only\n");
-      MPI_Finalize();
-      return 0;
-    }
-
-  if (argc<4)
-    {
-      printf("Usage: run_planner paramfile RamPerNode (Gb) TasksPerNode [Nnodes]\n");
-      MPI_Finalize();
-      return 0;
-    }
-
-  int RamPerNode = atoi(argv[2]);
-  int TasksPerNode = atoi(argv[3]);
-  int RamPerTask = (int)( (1024. * (double)RamPerNode) / (double)TasksPerNode);
-  double overhead;
-  int ForceNnodes;
-  if (argc>=5)
-    {
-      ForceNnodes = atoi(argv[4]);
-    }
-  else
-    ForceNnodes = 0;
-
-  printf("run_planner planning a run on nodes with %d Gb or RAM each, with %d tasks per node\n",RamPerNode,TasksPerNode);
-  if (ForceNnodes)
-    printf("The number of nodes will be forced to %d\n",ForceNnodes);
-
-
-  printf("\n");
-  printf("********************************************** \n");
-  printf("     This is the standard PINOCCHIO output     \n");
-  printf("********************************************** \n");
-
-  greetings();
-
-  workspace = gsl_integration_workspace_alloc(NWINT);
-
-  memset(&params, 0, sizeof(param_data));
-  strcpy(params.ParameterFile,argv[1]);
-
-  if (set_parameters())
-    exit(1);
-
-  if (initialize_cosmology())
-    exit(1);
-
-  /* now it re-initializes the variance with a SKS filter */
-  WindowFunctionType=1;
-  if (initialize_MassVariance())
-    return 1;
-
-  printf("\n");
-  printf("********************************************** \n");
-  printf("     End of standard PINOCCHIO output \n");
-  printf("********************************************** \n");
-  printf("\n");
-
-  /* sets the main grid variables */
-  Ngrids=1;
-
-  MyGrids=(grid_data*)malloc(Ngrids * sizeof(grid_data));
-
-  MyGrids[0].GSglobal[_x_] = params.GridSize[_x_];
-  MyGrids[0].GSglobal[_y_] = params.GridSize[_y_];
-  MyGrids[0].GSglobal[_z_] = params.GridSize[_z_];
-
-  MyGrids[0].Ntotal = (unsigned long long)MyGrids[0].GSglobal[_x_] *
-    (unsigned long long)MyGrids[0].GSglobal[_y_] *
-    (unsigned long long)MyGrids[0].GSglobal[_z_];
-
-  MyGrids[0].BoxSize = params.BoxSize_htrue;
-
-  memset(&memory,0,sizeof(memory_data));
-
-  double sigma = sqrt(MassVariance(params.BoxSize_htrue/(double)params.GridSize[_x_]/PI/NYQUIST));
-#ifndef CLASSIC_FRAGMENTATION
-  /* needed overhead is estimated based on the mass variance on the grid */
-  overhead = (sigma < 6 ? pow(sigma/6.0,2.0) * 3.8 * MARGIN : pow(sigma/6.0,0.6) * 3.8 * MARGIN);
-#endif
-
-
-#ifdef TWO_LPT
-#ifdef THREE_LPT
-  double baseline = 155;
-#else
-  double baseline = 130;
-#endif
-#else
-  double baseline = 95;
-#endif
-#ifdef SNAPSHOT
-  baseline += 4;
-#endif
-
-
-  /* setting MaxMemPerParticle */
-  params.MaxMemPerParticle = baseline;
-  double old=0.0; int Nnodes=0;
-
-#ifndef CLASSIC_FRAGMENTATION
-  printf("needed overhead: %f\n",overhead);
-#endif
-  int count=0, result;
-
-  if (ForceNnodes)
-    {
-      /* in this case the number of nodes is fixed */
-      params.MaxMemPerParticle = (int)(ForceNnodes / ((double)MyGrids[0].Ntotal / GBYTE / (double)RamPerNode) ) - 1;
-      if (params.MaxMemPerParticle<baseline)
-	{
-	  printf("**************************************************************************\n");
-	  printf("The number of nodes you provided is insufficient, I will compute it myself\n");
-	  printf("**************************************************************************\n");
-	  Nnodes=0;
-	}
-      else
-	{
-	  NTasks = ForceNnodes * TasksPerNode;
-
-	  MyGrids[0].ParticlesPerTask = (int)((double)MyGrids[0].Ntotal / (double)NTasks);
-	  /* proxies for pfft allocation */
-	  MyGrids[0].total_local_size = MyGrids[0].ParticlesPerTask;
-	  MyGrids[0].total_local_size_fft = MyGrids[0].total_local_size
-	    * (MyGrids[0].GSglobal[_x_] + 1) / MyGrids[0].GSglobal[_x_];
-
-	  printf("\n");
-	  printf("********************************************** \n");
-	  printf("                set_subboxes output            \n");
-	  printf("********************************************** \n");
-	  printf("\n");
-	  result = set_subboxes();
-	  printf("\n");
-	  printf("********************************************** \n");
-	  printf("\n");
-
-	  if (result)
-	    {
-	      printf("**************************************************************************\n");
-	      printf("The number of nodes you provided is insufficient, I will compute it myself\n");
-	      printf("**************************************************************************\n");
-	      Nnodes=0;
-	    }
-	  else
-	    {
-	      printf("I found a successful configuration on %d nodes\n",ForceNnodes);
-	      Nnodes = ForceNnodes;
-	    }
-	}
-    }
-
-  if (!Nnodes)
-    {
-      /* in this case it finds the number of needed nodes */
-      do
-	{
-#ifdef CLASSIC_FRAGMENTATION
-	  if (old==params.MaxMemPerParticle)
-	    params.MaxMemPerParticle+=10;
-#endif
-
-	  old = params.MaxMemPerParticle;
-	  /* estimate of the number of needed nodes */
-	  Nnodes = (int)((double)MyGrids[0].Ntotal * params.MaxMemPerParticle / GBYTE / (double)RamPerNode + 1);
-	  NTasks = Nnodes * TasksPerNode;
-
-	  MyGrids[0].ParticlesPerTask = (int)((double)MyGrids[0].Ntotal / (double)NTasks);
-
-	  /* proxies for pfft allocation */
-	  MyGrids[0].total_local_size = MyGrids[0].ParticlesPerTask;
-	  MyGrids[0].total_local_size_fft = MyGrids[0].total_local_size
-	    * (MyGrids[0].GSglobal[_x_] + 1) / MyGrids[0].GSglobal[_x_];
-
-	  printf("\n");
-	  printf("********************************************** \n");
-	  printf("  set_subboxes output, IGNORE ERROR MESSAGES   \n");
-	  printf("********************************************** \n");
-	  printf("\n");
-	  result = set_subboxes();
-	  printf("\n");
-	  printf("********************************************** \n");
-	  printf("\n");
-
-#ifdef CLASSIC_FRAGMENTATION
-	  /* I add a 5% margin here */
-	  overhead = (double)subbox.Npart / (double)MyGrids[0].ParticlesPerTask * 1.05;
-#endif
-
-	  params.MaxMemPerParticle =
-	    overhead * (double)(sizeof(product_data) + FRAGFIELDS * sizeof(int)) +
-	    (double)(memory.prods + memory.groups) / (double)MyGrids[0].ParticlesPerTask;
-	  if (params.MaxMemPerParticle<baseline)
-	    params.MaxMemPerParticle = baseline;
-
-	  printf("I tried MaxMemPerParticle = %d; Nnodes = %d; NTasks = %d; MyGrids[0].ParticlesPerTask = %d; new MaxMemPerParticle = %d\n",(int)old,Nnodes,NTasks,MyGrids[0].ParticlesPerTask,(int)params.MaxMemPerParticle);
-	  count++;
-
-	} while ((params.MaxMemPerParticle > old || result==1) && count<=MAXCOUNT);
-
-      if (count>MAXCOUNT)
-	{
-	  printf("Sorry, I could not find an acceptable configuration for this run!\n");
-#ifdef CLASSIC_FRAGMENTATION
-	  printf("This is too much for CLASSIC_FRAGMENTATION, please uncomment this option in the Makefile\n");
-#else
-	  printf("Try to contact pierluigi.monaco@inaf for some help\n");
-#endif
-	  return 1;
-	}
-    }
-
-
-  params.MaxMem            = RamPerTask;
-  params.PredPeakFactor    = (sigma < 6 ? (sigma-6)/3.0 + 1.5 : 1.5);
-  if (params.PredPeakFactor<0.6)
-    params.PredPeakFactor = 0.6;
-#ifdef CLASSIC_FRAGMENTATION
-  params.BoundaryLayerFactor = 1;
-#else
-  params.BoundaryLayerFactor = 3;
-#endif
-
-  printf("\n********************************************** \n");
-  printf("Density std dev on grid for this run: %f\n",sigma);
-  printf("We assume a value of MaxMemPerParticle of %d\n",(int)params.MaxMemPerParticle);
-  printf("The number of nodes needed for this run is: %d\n",Nnodes);
-  printf("Number of MPI tasks used for the run: %d\n",NTasks);
-
-  if ((int)(MyGrids[0].ParticlesPerTask * params.MaxMemPerParticle / MBYTE + 1.0) > params.MaxMem)
-    {
-      printf("ERROR: MaxMem of %d Mb per task is insufficient to store %d bytes per particle\n",
-	     params.MaxMem, (int)params.MaxMemPerParticle);
-      printf("       please increase MaxMem to at least %d\n",
-	     (int)(MyGrids[0].ParticlesPerTask * params.MaxMemPerParticle / MBYTE + 1.0));
-
-      return 1;
-    }
-
-
-  /* now it re-initializes the variance with a top-hat filter */
-  WindowFunctionType=2;
-  if (initialize_MassVariance())
-    return 1;
-
-  printf("\n");
-  printf("A successful PINOCCHIO run is determined by these parameters:\n");
-  printf("- MaxMem: is the memory available to the MPI task;\n");
-  printf("- MaxMemPerParticle: is the memory per particle that can be allocated;\n");
-  printf("- BoundaryLayerFactor: is the depth of the boundary layer.\n");
-  printf("\n");
-  printf("  Each task adds to the fragmentation sub-box a layer as deep\n");
-  printf("  as BoundaryLayerFactor times the Lagrangian size of the largest\n");
-  printf("  halo expected in the box. The augmented sub-box will be smaller than the whole box.\n");
-  printf("  In the new fragmentation, halos at the border of the fragmentation sub-volume\n");
-  printf("  are augmented by BoundaryLayerFactor times their Lagrangian size.\n");
-  printf("  Suggested value: 1.0 for the classic fragmentation, 3.0 for the new fragmentation.\n");
-  printf("\n");
-  printf("- PredPeakFactor: the number of allocated peaks will be PredPeakFactor times 1/6 of\n");
-  printf("  the particles in the sub-box (without boundary layer). If this is kept small \n");
-  printf("  there might be not enough space to allocate peaks.\n");
-  printf("  Suggested value: 0.6 at low resolution (Mpart~1e11 Msun/h), \n");
-  printf("  0.8 at medium resolution (Mpart~1e9 Msun/h), >1.0 at higher resolution.\n");
-  printf("  At the end of a run, the code suggests a minimum value for PredPeakFactor,\n");
-  printf("  but keep a margin to it.\n");
-  printf("\n");
-
-  struct map{
-    int lz;
-    double oh,am,m1,m2,m3,m4,m5,m6,m7,m8;
-  } mymap;
-
-  mymap.am=(double)memory.all/MBYTE;
-  mymap.oh=(double)subbox.Nalloc/(double)MyGrids[0].ParticlesPerTask;
-  mymap.m1=(double)memory.prods/(double)MyGrids[0].ParticlesPerTask;
-  mymap.m2=(double)(memory.fields+memory.fields_to_keep)/(double)MyGrids[0].ParticlesPerTask;
-  mymap.m3=(double)memory.fft/(double)MyGrids[0].ParticlesPerTask;
-  mymap.m4=(double)memory.fmax_total/(double)MyGrids[0].ParticlesPerTask;
-  mymap.m5=(double)memory.frag_prods/(double)MyGrids[0].ParticlesPerTask;
-  mymap.m6=(double)(memory.groups+memory.frag_arrays)/(double)MyGrids[0].ParticlesPerTask;
-  mymap.m7=(double)memory.frag_total/(double)MyGrids[0].ParticlesPerTask;
-  mymap.m8=(double)memory.all/(double)MyGrids[0].ParticlesPerTask;
-
-
-  printf("\n");
-  printf("Map of memory usage for Task 0:\n");
-  printf("Task N.    mem(MB) overhead   products   fields     ffts     fmax  frag pr.  groups fragment  total bytes per particle\n");
-
-  printf("%6d   %8.0f  %6.1f       %6.1f   %6.1f   %6.1f   %6.1f   %6.1f   %6.1f   %6.1f   %6.1f\n",
-	 0, mymap.am, mymap.oh, mymap.m1, mymap.m2, mymap.m3, mymap.m4, mymap.m5, mymap.m6, mymap.m7, mymap.m8);
-
-  printf("\n");
-  printf("Complete memory map\n");
-  printf("  memory.prods:           %12zu, %6.1f bpp\n",memory.prods,           (double)memory.prods/(double)MyGrids[0].total_local_size);
-  printf("  memory.fields_to_keep   %12zu, %6.1f bpp\n",memory.fields_to_keep,  (double)memory.fields_to_keep/(double)MyGrids[0].total_local_size);
-  printf("  memory.fields           %12zu, %6.1f bpp\n",memory.fields,          (double)memory.fields/(double)MyGrids[0].total_local_size);
-  printf("  memory.first_allocated: %12zu, %6.1f bpp\n",memory.first_allocated, (double)memory.first_allocated/(double)MyGrids[0].total_local_size);
-  printf("  memory.fft:             %12zu, %6.1f bpp\n",memory.fft,             (double)memory.fft/(double)MyGrids[0].total_local_size);
-  printf("  memory.fmax_total:      %12zu, %6.1f bpp\n",memory.fmax_total,      (double)memory.fmax_total/(double)MyGrids[0].total_local_size);
-  printf("  memory.frag_prods:      %12zu, %6.1f bpp\n",memory.frag_prods,      (double)memory.frag_prods/(double)MyGrids[0].total_local_size);
-  printf("  memory.frag_arrays:     %12zu, %6.1f bpp\n",memory.frag_arrays,     (double)memory.frag_arrays/(double)MyGrids[0].total_local_size);
-  printf("  memory.groups:          %12zu, %6.1f bpp\n",memory.groups,	        (double)memory.groups/(double)MyGrids[0].total_local_size);
-  printf("  memory.frag_allocated:  %12zu, %6.1f bpp\n",memory.frag_allocated,  (double)memory.frag_allocated/(double)MyGrids[0].total_local_size);
-  printf("  memory.frag_total:      %12zu, %6.1f bpp\n",memory.frag_total,      (double)memory.frag_total/(double)MyGrids[0].total_local_size);
-  printf("  memory.all:             %12zu, %6.1f bpp\n",memory.all,	        (double)memory.all/(double)MyGrids[0].total_local_size);
-
-  printf("\n");
-  printf("Number of nodes needed for this run:    %d\n",Nnodes);
-  if (ForceNnodes && ForceNnodes!=Nnodes)
-    printf("WARNING: this is different from your request!\n");
-  printf("Number of MPI tasks used for the run:   %d\n",NTasks);
-  printf("Each MPI task will need at least %f Mb\n",MyGrids[0].ParticlesPerTask * params.MaxMemPerParticle / MBYTE + 1.0);
-  double Nfloat = (double)MyGrids[0].Ntotal*(double)params.MaxMemPerParticle / (RamPerNode * GBYTE);
-  printf("This run will occupy memory of %5.2f nodes, %4.2f percent of available memory\n",
-	 Nfloat, 100.*Nfloat / (double)Nnodes);
-  printf("Density standard deviation on the grid: %f\n",sigma);
-  printf("Predicted overhead:                     %f\n",overhead);
-  printf("You can copy and paste these into the parameter file:\n");
-  printf("   MaxMem                %d\n",params.MaxMem);
-  printf("   MaxMemPerParticle     %d\n",(int)params.MaxMemPerParticle);
-  printf("   PredPeakFactor        %3.1f\n",params.PredPeakFactor);
-  printf("   BoundaryLayerFactor   %3.1f\n",params.BoundaryLayerFactor);
-  if (sigma>5.)
-    printf("WARNING: this is a %shigh resolution run, it may fail at first attempt,\n  but in this case the code will suggest where the problem is.\n",(sigma>6?"very ":""));
-
-#ifndef CLASSIC_FRAGMENTATION
-  if (sigma>6.)
-    printf("  Please consider using 2.5 or even 2.0 for BoundaryLayerFactor to increase the probability of success\n");
-#endif
-  printf("\n");
-
-  (void)estimate_file_size();
-  printf("\n");
-
-  printf("**************************************************************************\n");
-  printf(" I'm now checking parameters and directives, this may give error messages \n");
-  printf("**************************************************************************\n");
 ```
 
 
@@ -11749,6 +11414,31 @@ int write_catalog(int iout)
 		nhalos += ngood;
 	}
 
+```
+
+
+----- FILE: src/write_mass_maps.c -----
+```text
+/* MASS_MAPS minimal diagnostics skeleton (clean rewrite) */
+#include "pinocchio.h"
+#ifdef MASS_MAPS
+#include <math.h>
+#include <stdint.h>
+
+#ifndef PLC
+#error "MASS_MAPS requires PLC"
+#endif
+
+int write_mass_maps(double z_start, double z_end)
+{
+  (void)z_start;
+  (void)z_end;
+  if (ThisTask == 0)
+    printf("[%s] MASS_MAPS: diagnostics-only skeleton (positions + summaries).\n", fdate());
+  return 0;
+}
+
+#endif /* MASS_MAPS */
 ```
 
 
