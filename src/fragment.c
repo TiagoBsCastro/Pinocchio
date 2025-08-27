@@ -434,6 +434,12 @@ int fragment()
         if (build_groups(Npeaks, ScaleDep.z[mysegment], (mysegment == 0)))
           return 1;
 
+#ifdef MASS_MAPS
+        /* Orchestrate mass map processing AFTER groups are built so halo membership is known.
+           First segment (mysegment==0) will early-return inside the function. */
+        mass_maps_process_segment(mysegment, ScaleDep.z[mysegment], (mysegment == 0));
+#endif
+
         tmp = MPI_Wtime() - tmp;
         if (!ThisTask)
           printf("[%s] Fragmentation done to redshift %6.4f, cputime = %14.6f\n",

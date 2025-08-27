@@ -26,6 +26,10 @@ int NMassSheets = 0;
 double *MassMapBoundaryZ = NULL;
 double *MassMapBoundaryChi = NULL;
 double *MassMapBoundaryDA = NULL;
+/* Per-segment replication candidate list (radial overlap with segment chi span) */
+static int *MassMapSegmentReplications = NULL;
+static int MassMapSegmentReplicationCount = 0;
+static int MassMapSegmentReplicationsCapacity = 0;
 
 /* Epsilon for duplicate detection (user chose 1e-3) */
 #define MASS_MAPS_Z_EPS 1e-3
@@ -252,22 +256,95 @@ int mass_maps_replication_overlaps_sheet(int rep_id, int sheet_id)
 {
   if (rep_id < 0 || rep_id >= plc.Nreplications || sheet_id < 0 || sheet_id >= NMassSheets)
     return 0;
-  /* Replication stores F1,F2 (negative radii markers) inverted sign logic in existing PLC code.
-     We reconstruct approximate radial min/max in InterPartDist units then to Mpc. */
-  double r_rep_min = -plc.repls[rep_id].F1 * params.InterPartDist; /* near distance */
-  double r_rep_max = -plc.repls[rep_id].F2 * params.InterPartDist; /* far distance */
-  if (r_rep_min > r_rep_max)
-  {
-    double tmp = r_rep_min;
-    r_rep_min = r_rep_max;
-    r_rep_max = tmp;
-  }
+  /* New interpretation: F1,F2 store scale factors (1+z). Convert to z then comoving distance. */
+  double F1 = plc.repls[rep_id].F1;
+  double F2 = plc.repls[rep_id].F2;
+  double z1 = F1 - 1.0;
+  double z2 = F2 - 1.0;
+  if (z1 < 0)
+    z1 = 0; /* clamp */
+  if (z2 < 0)
+    z2 = 0;
+  double chi1 = ComovingDistance(z1);
+  double chi2 = ComovingDistance(z2);
+  double r_rep_min = (chi1 < chi2) ? chi1 : chi2;
+  double r_rep_max = (chi1 > chi2) ? chi1 : chi2;
   double chi_lo = MassSheets[sheet_id].chi_lo;
   double chi_hi = MassSheets[sheet_id].chi_hi;
   /* Overlap if intervals intersect */
   if (r_rep_max < chi_lo || r_rep_min > chi_hi)
     return 0;
   return 1;
+}
+
+/* Return replication radial chi bounds via stored scale factors (1+z) */
+static inline void mass_maps_replication_chi_bounds(int rep_id, double *rmin, double *rmax)
+{
+  double F1 = plc.repls[rep_id].F1;
+  double F2 = plc.repls[rep_id].F2;
+  double z1 = F1 - 1.0;
+  if (z1 < 0)
+    z1 = 0;
+  double z2 = F2 - 1.0;
+  if (z2 < 0)
+    z2 = 0;
+  double chi1 = ComovingDistance(z1);
+  double chi2 = ComovingDistance(z2);
+  if (chi1 < chi2)
+  {
+    *rmin = chi1;
+    *rmax = chi2;
+  }
+  else
+  {
+    *rmin = chi2;
+    *rmax = chi1;
+  }
+}
+
+/* Build list of replications whose chi interval overlaps this segment chi span */
+static void mass_maps_select_segment_replications(int segment_index)
+{
+  MassMapSegmentReplicationCount = 0;
+  if (segment_index <= 0)
+    return; /* first segment has no crossings */
+  /* Segment spans between previous and current fragmentation redshifts */
+  double z_prev = ScaleDep.z[segment_index - 1];
+  double z_curr = ScaleDep.z[segment_index];
+  /* Convert to chi; ComovingDistance grows with z so chi_prev > chi_curr given descending z array. */
+  double chi_prev = ComovingDistance(z_prev);
+  double chi_curr = ComovingDistance(z_curr);
+  /* Segment radial span is [chi_curr, chi_prev] (chi_prev >= chi_curr). */
+  double seg_chi_min = (chi_curr < chi_prev) ? chi_curr : chi_prev;
+  double seg_chi_max = (chi_curr > chi_prev) ? chi_curr : chi_prev;
+  /* Ensure capacity */
+  if (MassMapSegmentReplicationsCapacity < plc.Nreplications)
+  {
+    int newcap = plc.Nreplications;
+    int *tmp = (int *)realloc(MassMapSegmentReplications, sizeof(int) * newcap);
+    if (!tmp)
+    {
+      if (!ThisTask)
+        fprintf(stderr, "MASS_MAPS WARNING: cannot allocate segment replication list (N=%d).\n", plc.Nreplications);
+      return;
+    }
+    MassMapSegmentReplications = tmp;
+    MassMapSegmentReplicationsCapacity = newcap;
+  }
+  for (int r = 0; r < plc.Nreplications; ++r)
+  {
+    double rmin, rmax;
+    mass_maps_replication_chi_bounds(r, &rmin, &rmax);
+    if (rmax < seg_chi_min || rmin > seg_chi_max)
+      continue; /* no overlap */
+    MassMapSegmentReplications[MassMapSegmentReplicationCount++] = r;
+  }
+  if (!ThisTask && internal.verbose_level >= VDBG)
+  {
+    printf("[%s] MASS_MAPS: segment %d chi-span=[%g,%g] replication candidates=%d/%d\n",
+           fdate(), segment_index, seg_chi_min, seg_chi_max,
+           MassMapSegmentReplicationCount, plc.Nreplications);
+  }
 }
 
 /* Compute F = cos(theta) - cos(aperture) for a given position */
@@ -416,6 +493,56 @@ int mass_maps_point_inside_lightcone(const double pos[3], long *ipix_out)
     }
   }
   return 1;
+}
+
+/* ---------------------------------------------------------- */
+/* Orchestrator (skeleton)                                    */
+/* ---------------------------------------------------------- */
+/*
+ * mass_maps_process_segment (SKELETON)
+ * -----------------------------------
+ * Called once per fragmentation segment immediately AFTER build_groups()
+ * when both previous and current displacement states are in memory and
+ * group membership for the current segment has been established.
+ *
+ * Responsibilities (future implementation plan):
+ *   1. Lazy allocate / sanity-check mass map accumulation arrays.
+ *   2. Build per-particle halo membership mask (in-halo vs field).
+ *   3. Determine candidate replication list per sheet (radial prune).
+ *   4. Loop particles:
+ *        - For each relevant replication, test sign change
+ *          (mass_maps_particle_sign_change) for PLC entry.
+ *        - If crossing, interpolate entry position, locate sheet
+ *          (via MassMapBoundaryChi), compute HEALPix pixel, and
+ *          accumulate to total / halo / field counters.
+ *   5. (Deferred) Optionally accumulate ancillary stats (e.g. z_entry histogram).
+ *   6. Defer MPI reduction & FITS output until all segments processed.
+ *
+ * Current skeleton: only guards and verbose diagnostic (rank 0).
+ */
+void mass_maps_process_segment(int segment_index, double z_segment, int is_first_segment)
+{
+#ifdef MASS_MAPS
+  if (NMassSheets <= 0 || params.MassMapNSIDE <= 0)
+    return; /* feature disabled or not initialized */
+  if (is_first_segment)
+    return; /* need previous segment for crossings */
+  /* STEP 1: select replication candidates overlapping this segment radial span */
+  mass_maps_select_segment_replications(segment_index);
+  if (!ThisTask)
+  {
+    int show = MassMapSegmentReplicationCount < 10 ? MassMapSegmentReplicationCount : 10;
+    printf("[%s] MASS_MAPS: segment %d z=%g replication candidates %d/%d :",
+           fdate(), segment_index, z_segment,
+           MassMapSegmentReplicationCount, plc.Nreplications);
+    for (int i = 0; i < show; ++i)
+      printf(" %d", MassMapSegmentReplications[i]);
+    if (MassMapSegmentReplicationCount > show)
+      printf(" ...");
+    printf("\n");
+  }
+  /* Later steps will loop only over MassMapSegmentReplications[0..MassMapSegmentReplicationCount-1] */
+#endif /* MASS_MAPS */
 }
 
 #endif /* MASS_MAPS */
