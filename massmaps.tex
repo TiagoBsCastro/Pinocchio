@@ -1,0 +1,158 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb}
+\usepackage{hyperref}
+\usepackage{enumitem}
+
+\setlist{noitemsep,topsep=4pt}
+
+\title{Concise plan for PLC reconstruction to FITS HEALPix maps}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Compile-time / dependencies}
+\begin{itemize}
+  \item Required macros: \texttt{PLC}, \texttt{MASS\_MAPS}, \texttt{RECOMPUTE\_DISPLACEMENTS}, \texttt{TWO\_LPT} (and optionally \texttt{THREE\_LPT}, \texttt{SCALE\_DEPENDENT}).
+  \item Add CFITSIO dependency (detect via configure / CMake or simple \verb|#ifdef HAVE_CFITSIO|; fallback error).
+\end{itemize}
+
+\section{User input (mass sheet definition)}
+\begin{itemize}
+  \item Reuse outputs list file: monotonic descending redshifts
+  \(z_0 > z_1 > \dots > z_N\).
+  \item Consecutive pairs form sheets: sheet \(s\) spans \([z_{s+1},\, z_s]\).
+  \item Validation: at least 2 entries; strictly monotonic; warn if gaps are large \((\Delta z > \text{threshold})\).
+  \item Store in array \verb|MassSheet[s]|: \(\{\,\texttt{double}\ z_{\mathrm{hi}},\ z_{\mathrm{lo}},\ \chi_{\mathrm{hi}},\ \chi_{\mathrm{lo}},\ \texttt{double}\ w_{\mathrm{norm}}\,\}\).
+\end{itemize}
+
+\section{Precomputed cosmology geometry}
+\begin{itemize}
+  \item For each sheet boundary redshift compute comoving distance \(\chi(z)\) and angular diameter distance \(D_A(z)\).
+  \item Precompute \(1/(\chi_{\mathrm{hi}} - \chi_{\mathrm{lo}})\) for quick membership tests.
+  \item Observer position/orientation: ensure accessible globally (already in PLC context).
+\end{itemize}
+
+\section{PLC entry criterion}
+\begin{itemize}
+  \item Define scalar \(F_i\) per particle: choose existing PLC ``inside'' test (for example, signed distance from PLC cone or collapse layer).
+  \item Maintain arrays: \verb|prev_F[i]| (\verb|double|), \verb|prev_sign[i]| (\verb|int8_t|), \verb|crossed[i]| (\verb|bitset|) to mark already registered crossings.
+  \item Filled first time after initial displacement recompute.
+\end{itemize}
+
+\section{Segment loop hook}
+\begin{itemize}
+  \item After each \verb|recompute_displacements| call (inside fragment / segment driver): compute current \(F_i\) for all particles (parallel OpenMP). Detect sign change: \(\texttt{prev\_sign}[i] \neq \operatorname{sign}(F^{\text{curr}})\). If no change or already \verb|crossed[i]|, skip.
+\end{itemize}
+
+\section{Crossing time interpolation}
+\begin{itemize}
+  \item Linear interpolation:
+  \[
+  z_{\mathrm{entry}} = z_{\mathrm{prev}}
+  - F_{\mathrm{prev}}\,
+  \frac{z_{\mathrm{curr}} - z_{\mathrm{prev}}}{F_{\mathrm{curr}} - F_{\mathrm{prev}}}\,.
+  \]
+  \item Clamp; if \(\lvert F_{\mathrm{curr}} - F_{\mathrm{prev}} \rvert < \varepsilon\) use midpoint (flag for statistics).
+  \item Optionally refine with one midpoint evaluation if high precision is requested (configuration flag).
+  \item Interpolate Eulerian position:
+  \[
+  \alpha = \frac{z_{\mathrm{prev}} - z_{\mathrm{entry}}}{z_{\mathrm{prev}} - z_{\mathrm{curr}}},\qquad
+  \mathbf{x}_{\mathrm{entry}} = \mathbf{x}_{\mathrm{prev}} + \alpha \left(\mathbf{x}_{\mathrm{curr}} - \mathbf{x}_{\mathrm{prev}}\right).
+  \]
+\end{itemize}
+
+\section{Replications (periodic images)}
+\begin{itemize}
+  \item Precompute minimal replication box ranges to cover angular aperture at farthest sheet (based on aperture half-angle \(\theta_{\max}\) and box size\(/\chi\)).
+  \item Build list of replication offsets \(\texttt{RepList} = \{(d_x,d_y,d_z)\}\) applied only for candidate crossing particles.
+  \item Early reject replication if projected bounding sphere is outside aperture cone.
+\end{itemize}
+
+\section{Angular mapping}
+\begin{itemize}
+  \item Convert replicated \(\mathbf{x}_{\mathrm{entry}}\) to \((\theta,\phi)\) relative to observer.
+  \item If outside aperture: discard.
+  \item Compute HEALPix pixel: \texttt{ang2pix}\((nside,\, \theta,\, \phi)\) (RING scheme).
+  \item Determine sheet membership: find \(s\) with \(z_{\mathrm{entry}} \in [z_{\mathrm{lo}}, z_{\mathrm{hi}}]\); binary search over \(z_{\mathrm{lo}}\) array.
+  \item Accumulate contribution (mass or count) into local sheet map:
+  \(\texttt{map}[s][\texttt{pix}] \mathrel{+}= \texttt{weight}\) (default \(1\)).
+\end{itemize}
+
+\section{Data structures for maps}
+\begin{itemize}
+  \item One \verb|double| (or \verb|float|) array per sheet: size \(N_{\mathrm{pix}} = 12\, n_{\mathrm{side}}^2\).
+  \item If many sheets and high \(n_{\mathrm{side}}\) are memory heavy, allow streaming: allocate only active sheets (those whose \(z_{\mathrm{hi}}\) is still above current segment).
+  \item Optionally keep an \verb|int64| count map and convert to float surface density at finalization.
+\end{itemize}
+
+\section{MPI accumulation}
+\begin{itemize}
+  \item No per-particle communication; only per-sheet maps.
+  \item When a sheet becomes ``closed'' (current segment \(z_{\mathrm{curr}} < z_{\mathrm{lo}}\) of that sheet): \verb|MPI_Reduce| (SUM) its map to root, write FITS, free local map.
+  \item At end ensure remaining sheets are reduced.
+  \item For performance: if memory is acceptable, postpone all reductions to end and do one collective per sheet.
+\end{itemize}
+
+\section{FITS output}
+\begin{itemize}
+  \item File naming: \verb|massmap.sheet%03d.zhi%.4f_zlo%.4f.%s.fits| (for example, \texttt{RunFlag} inserted).
+  \item Primary HDU: image (\verb|float32|) of map values (RING ordering).
+  \item Header keywords: \verb|RUNFLAG|, \verb|NSIDE|, \verb|ORDERING='RING'|, \verb|Z_HI|, \verb|Z_LO|, \verb|CHI_HI|, \verb|CHI_LO|, \verb|WEIGHT|, \verb|NPART|, \verb|SEGMENTS|, \verb|METHOD='PLCENTRY'|.
+  \item Optional second HDU: counts (if primary stores weighted values), or variance estimate.
+  \item Compression (optional): use tile compression (\verb|RICE_1|) if CFITSIO is available.
+\end{itemize}
+
+\section{Logging / diagnostics}
+\begin{itemize}
+  \item Per sheet: number of crossings, fraction ambiguous \((\lvert \Delta F\rvert < \varepsilon)\), average replication count, timing.
+  \item Global summary at end: total crossings versus total particles, memory peak (approximate).
+  \item Optional debug: write ASCII list of first \(N\) crossing events.
+\end{itemize}
+
+\section{Configuration parameters (add to params)}
+\begin{itemize}
+  \item \verb|mass_maps_nside|
+  \item \verb|plc_entry_function_selector| (if multiple \(F\) definitions)
+  \item \verb|plc_interp_refine| (\verb|bool|)
+  \item \verb|plc_replication_margin| (factor \(\ge 1\))
+  \item \verb|mass_maps_output_dir| (default ``\texttt{.}'')
+  \item \verb|mass_maps_float32| (\verb|bool|)
+  \item \verb|mass_maps_streaming| (\verb|bool|)
+\end{itemize}
+
+\section{Performance considerations}
+\begin{itemize}
+  \item Loop fusion: compute \(F_{\mathrm{curr}}\), detect crossing, compute pixel and accumulate in one pass to minimize memory traffic.
+  \item Thread-private small buffers for \((\texttt{pix}, \texttt{sheet}, \texttt{weight})\) when sparse; flush to shared map with atomic or critical (consider threshold switch from sparse to direct).
+  \item Use SIMD-friendly structure for products (SoA extraction) only if a hotspot.
+\end{itemize}
+
+\section{Edge cases}
+\begin{itemize}
+  \item Particle crosses multiple sheets in one segment (possible if segment spans more than one boundary): handle by checking \(z_{\mathrm{entry}}\) against all overlapping \([z_{\mathrm{lo}}, z_{\mathrm{hi}}]\) (while sign changes only once; multiple sheets only if boundaries are within same \(\Delta z\); document assumption that segment spacing is fine enough to avoid this).
+  \item \(F_{\mathrm{prev}} = 0\): treat as already inside; only count first transition from outside\(\to\)inside (sign \(+\) to \( -\) versus definition).
+  \item Re-entrant crossings: ignore if \verb|crossed[i]| is already set (or optionally count multiple with configuration flag).
+\end{itemize}
+
+\section{Validation plan}
+\begin{itemize}
+  \item Unit test with synthetic linear field where analytic crossing redshift is known.
+  \item Convergence test halving segment spacing.
+  \item Compare map monopole with total number of crossings \(/\ 4\pi\).
+  \item Spot check random particles' interpolated \(z_{\mathrm{entry}}\) versus direct root-finding with extra displacement recomputes.
+\end{itemize}
+
+\section{Minimal code touch points}
+\begin{itemize}
+  \item Initialization: parse sheets; allocate sheet metadata; allocate maps (or mark active).
+  \item After each \verb|compute_displacements|: hook to crossing detector.
+  \item Finalization: reduce remaining maps; FITS writes; free.
+  \item Build system: add CFITSIO include/link; guard with \verb|#ifdef HAVE_CFITSIO|.
+\end{itemize}
+
+\end{document}
+

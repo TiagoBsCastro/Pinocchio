@@ -486,7 +486,9 @@ int fragment()
     double z_end = params.LastzForPLC;
     if (z_start < z_end)
     {
-      double tmpz = z_start; z_start = z_end; z_end = tmpz;
+      double tmpz = z_start;
+      z_start = z_end;
+      z_end = tmpz;
     }
     if (write_mass_maps(z_start, z_end))
       return 1;
