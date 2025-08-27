@@ -392,6 +392,16 @@ extern double *MassMapBoundaryDA;  /* length NMassSheets+1 */
 int mass_maps_init_sheets(void);   /* allocate & fill MassSheets; returns 0 on success */
 void mass_maps_free_sheets(void);
 int mass_maps_write_sheet_table(void);
+
+/* MASS_MAPS / PLC auxiliary utilities */
+int mass_maps_replication_overlaps_sheet(int rep_id, int sheet_id);
+int mass_maps_particle_sign_change(int rep_id,
+                                   const double q[3],            /* Lagrangian or reference position */
+                                   const double disp_prev[3],     /* previous total displacement */
+                                   const double disp_curr[3],     /* current total displacement */
+                                   double *alpha_out,             /* crossing interpolation fraction (0..1) */
+                                   double entry_pos[3]);          /* interpolated entry Eulerian position */
+int mass_maps_point_inside_lightcone(const double pos[3], long *ipix_out); /* if inside and NSIDE>0 sets *ipix_out, else -1 */
 #endif /* MASS_MAPS */
 
 typedef struct

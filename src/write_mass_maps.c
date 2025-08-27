@@ -16,6 +16,9 @@
 #error "MASS_MAPS requires HAVE_CFITSIO"
 #endif
 #include <fitsio.h>
+#ifdef MASS_MAPS
+#include <chealpix.h>
+#endif
 
 /* Global sheet array */
 MassSheet *MassSheets = NULL;
@@ -27,6 +30,21 @@ double *MassMapBoundaryDA = NULL;
 /* Epsilon for duplicate detection (user chose 1e-3) */
 #define MASS_MAPS_Z_EPS 1e-3
 
+/*
+ * mass_maps_init_sheets
+ * ---------------------
+ * Build the array of MassSheet structures from the global output redshift list.
+ * Validates:
+ *   - At least 2 output redshifts.
+ *   - Strictly descending ordering (z[i] > z[i+1]).
+ *   - First / last redshifts match PLC StartingzForPLC / LastzForPLC.
+ *   - No adjacent duplicates within MASS_MAPS_Z_EPS.
+ * Allocates:
+ *   - MassSheets (NMassSheets = outputs.n - 1)
+ *   - Boundary arrays (Z, Chi, DA) of length outputs.n.
+ * Precomputes per-sheet: chi / da bounds, deltas, inverse delta, chi^3 difference.
+ * Returns 0 on success, 1 on validation / allocation failure (after emitting message on task 0).
+ */
 int mass_maps_init_sheets(void)
 {
   /* Preconditions: outputs.z[] filled, descending order, outputs.n >= 2 */
@@ -140,6 +158,11 @@ int mass_maps_init_sheets(void)
   return 0;
 }
 
+/*
+ * mass_maps_free_sheets
+ * ---------------------
+ * Free MassSheets and the boundary arrays; safe to call multiple times.
+ */
 void mass_maps_free_sheets(void)
 {
   if (MassSheets)
@@ -155,6 +178,16 @@ void mass_maps_free_sheets(void)
   MassMapBoundaryZ = MassMapBoundaryChi = MassMapBoundaryDA = NULL;
 }
 
+/*
+ * mass_maps_write_sheet_table
+ * ---------------------------
+ * Rank 0 only: write an ASCII table describing each mass sheet to
+ *   pinocchio.<RunFlag>.sheets.out
+ * Columns include redshift bounds, comoving / angular diameter distances,
+ * and precomputed delta / inverse spans. Intended for reproducibility and
+ * external analysis tools.
+ * Returns 0 on success (or if nothing to do), 1 on I/O error.
+ */
 int mass_maps_write_sheet_table(void)
 {
   if (ThisTask != 0)
@@ -184,6 +217,205 @@ int mass_maps_write_sheet_table(void)
   if (internal.verbose_level >= VDIAG)
     printf("[%s] MASS_MAPS: wrote %s (N=%d)\n", fdate(), fname, NMassSheets);
   return 0;
+}
+
+/* ---------------------------------------------------------- */
+/* Auxiliary geometry / crossing utilities (minimal version) */
+/* ---------------------------------------------------------- */
+
+#define MASS_MAPS_F_EPS 1e-7
+
+static inline double plc_cos_aperture(void)
+{
+  return cos(params.PLCAperture);
+}
+
+static inline void plc_axis(double v[3])
+{
+  v[0] = plc.zvers[0];
+  v[1] = plc.zvers[1];
+  v[2] = plc.zvers[2];
+}
+
+/* Test if a replication radial interval overlaps sheet radial interval */
+/*
+ * mass_maps_replication_overlaps_sheet
+ * ------------------------------------
+ * Quick radial overlap test between a replication volume and a mass sheet.
+ * Replication radial interval is reconstructed from plc.repls[rep].F1 / F2
+ * (stored with sign convention set during geometry build).
+ * Sheet radial interval is [chi_lo, chi_hi].
+ * Returns 1 if intervals intersect, else 0. Performs bounds checks.
+ * NOTE: This is an approximate radial filter; angular aperture is NOT tested here.
+ */
+int mass_maps_replication_overlaps_sheet(int rep_id, int sheet_id)
+{
+  if (rep_id < 0 || rep_id >= plc.Nreplications || sheet_id < 0 || sheet_id >= NMassSheets)
+    return 0;
+  /* Replication stores F1,F2 (negative radii markers) inverted sign logic in existing PLC code.
+     We reconstruct approximate radial min/max in InterPartDist units then to Mpc. */
+  double r_rep_min = -plc.repls[rep_id].F1 * params.InterPartDist; /* near distance */
+  double r_rep_max = -plc.repls[rep_id].F2 * params.InterPartDist; /* far distance */
+  if (r_rep_min > r_rep_max)
+  {
+    double tmp = r_rep_min;
+    r_rep_min = r_rep_max;
+    r_rep_max = tmp;
+  }
+  double chi_lo = MassSheets[sheet_id].chi_lo;
+  double chi_hi = MassSheets[sheet_id].chi_hi;
+  /* Overlap if intervals intersect */
+  if (r_rep_max < chi_lo || r_rep_min > chi_hi)
+    return 0;
+  return 1;
+}
+
+/* Compute F = cos(theta) - cos(aperture) for a given position */
+/*
+ * mass_maps_compute_F
+ * -------------------
+ * Compute scalar F = cos(theta) - cos(aperture) for position relative to
+ * the PLC observer and axis. Inside-cone test is F >= 0.
+ * Returns 1.0 (definitely inside) at the cone apex to avoid division by zero.
+ */
+static inline double mass_maps_compute_F(const double pos[3])
+{
+  double axis[3];
+  plc_axis(axis);
+  double dx[3] = {pos[0] - plc.center[0], pos[1] - plc.center[1], pos[2] - plc.center[2]};
+  double r2 = dx[0] * dx[0] + dx[1] * dx[1] + dx[2] * dx[2];
+  if (r2 == 0.0)
+    return 1.0; /* treat at apex as inside */
+  double rinv = 1.0 / sqrt(r2);
+  double costh = (dx[0] * axis[0] + dx[1] * axis[1] + dx[2] * axis[2]) * rinv;
+  return costh - plc_cos_aperture();
+}
+
+/*
+ * mass_maps_sign
+ * --------------
+ * Map floating value F to {-1,0,+1} with tolerance MASS_MAPS_F_EPS.
+ */
+static inline int mass_maps_sign(double F)
+{
+  if (fabs(F) < MASS_MAPS_F_EPS)
+    return 0;
+  return (F > 0.0) ? 1 : -1;
+}
+
+/* Determine if particle changed sign (outside->inside) between previous & current displacement states for a replication.
+   Inputs are Eulerian displacements already (prev & curr) relative to q (Lagrangian) plus replication shift via rep indices. */
+/*
+ * mass_maps_particle_sign_change
+ * ------------------------------
+ * Test whether a particle (given previous & current displacement states) enters
+ * the PLC cone during the latest segment for a specific replication.
+ *
+ * Inputs:
+ *   rep_id      - replication index
+ *   q[3]        - base (Lagrangian) position of particle
+ *   disp_prev   - previous total Eulerian displacement vector
+ *   disp_curr   - current total Eulerian displacement vector
+ *   alpha_out   - (optional) on success, fraction in [0,1] from previous to current state
+ *   entry_pos   - (optional) interpolated Eulerian position at crossing
+ *
+ * Logic:
+ *   1. Build previous and current replicated positions.
+ *   2. Compute F_prev, F_curr.
+ *   3. Detect sign change (outside -> inside: F_prev < 0, F_curr >= 0).
+ *   4. Linear interpolation alpha = -F_prev / (F_curr - F_prev); clamp to [0,1].
+ * Skips ambiguous cases where |ΔF| < MASS_MAPS_F_EPS.
+ *
+ * Returns 1 if a valid crossing detected, else 0.
+ */
+int mass_maps_particle_sign_change(int rep_id,
+                                   const double q[3],
+                                   const double disp_prev[3],
+                                   const double disp_curr[3],
+                                   double *alpha_out,
+                                   double entry_pos[3])
+{
+  if (rep_id < 0 || rep_id >= plc.Nreplications)
+    return 0;
+  int ii = plc.repls[rep_id].i;
+  int jj = plc.repls[rep_id].j;
+  int kk = plc.repls[rep_id].k;
+  double shift[3] = {ii * MyGrids[0].GSglobal[_x_], jj * MyGrids[0].GSglobal[_y_], kk * MyGrids[0].GSglobal[_z_]};
+
+  double pos_prev[3] = {q[0] + disp_prev[0] + shift[0], q[1] + disp_prev[1] + shift[1], q[2] + disp_prev[2] + shift[2]};
+  double pos_curr[3] = {q[0] + disp_curr[0] + shift[0], q[1] + disp_curr[1] + shift[1], q[2] + disp_curr[2] + shift[2]};
+
+  double F_prev = mass_maps_compute_F(pos_prev);
+  double F_curr = mass_maps_compute_F(pos_curr);
+  int s_prev = mass_maps_sign(F_prev);
+  int s_curr = mass_maps_sign(F_curr);
+  if (!(s_prev < 0 && s_curr >= 0))
+    return 0; /* no crossing of interest */
+  double dF = F_curr - F_prev;
+  if (fabs(dF) < MASS_MAPS_F_EPS)
+    return 0;                  /* ambiguous; skip */
+  double alpha = -F_prev / dF; /* fraction from prev->curr to crossing */
+  if (alpha < 0.0)
+    alpha = 0.0;
+  else if (alpha > 1.0)
+    alpha = 1.0;
+  if (alpha_out)
+    *alpha_out = alpha;
+  if (entry_pos)
+  {
+    entry_pos[0] = pos_prev[0] + alpha * (pos_curr[0] - pos_prev[0]);
+    entry_pos[1] = pos_prev[1] + alpha * (pos_curr[1] - pos_prev[1]);
+    entry_pos[2] = pos_prev[2] + alpha * (pos_curr[2] - pos_prev[2]);
+  }
+  return 1;
+}
+
+/* Check pure geometric inside (angle + radial within PLC range) for a single position */
+/*
+ * mass_maps_point_inside_lightcone
+ * --------------------------------
+ * Full geometric test for a single Eulerian position:
+ *   - Inside angular aperture (F >= 0)
+ *   - Radial distance within global PLC radial span [chi_min, chi_max]
+ * Does NOT test sheet membership (which is a separate step) or replication.
+ * Returns 1 if inside, else 0.
+ */
+int mass_maps_point_inside_lightcone(const double pos[3], long *ipix_out)
+{
+  double F = mass_maps_compute_F(pos);
+  if (F < 0.0)
+    return 0; /* outside aperture */
+  /* radial check relative to overall PLC bounds (Fstart/Fstop store scale factors 1+z) */
+  double dx = pos[0] - plc.center[0];
+  double dy = pos[1] - plc.center[1];
+  double dz = pos[2] - plc.center[2];
+  double r = sqrt(dx * dx + dy * dy + dz * dz);
+  double chi_min = ComovingDistance(params.LastzForPLC);
+  double chi_max = ComovingDistance(params.StartingzForPLC);
+  if (r < chi_min || r > chi_max)
+    return 0;
+  if (ipix_out)
+  {
+    if (params.MassMapNSIDE > 0)
+    {
+      /* Convert Cartesian to theta,phi (HEALPix uses theta: [0,pi] from +z, phi: [0,2pi)) */
+      double vx = dx / r, vy = dy / r, vz = dz / r;
+      /* Direction cosines relative to PLC axis frame: we have plc.zvers as axis; need global spherical relative to +Z.
+         Simplest: use global coordinates directly. */
+      double theta = acos(fmax(-1.0, fmin(1.0, vz))); /* clamp for numerical safety */
+      double phi = atan2(vy, vx);
+      if (phi < 0)
+        phi += 2.0 * M_PI;
+      long ipix; /* CHEALPix: choose RING ordering (widely interoperable) */
+      ang2pix_ring(params.MassMapNSIDE, theta, phi, &ipix);
+      *ipix_out = ipix;
+    }
+    else
+    {
+      *ipix_out = -1;
+    }
+  }
+  return 1;
 }
 
 #endif /* MASS_MAPS */
