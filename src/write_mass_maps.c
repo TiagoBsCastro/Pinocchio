@@ -20,6 +20,9 @@
 /* Global sheet array */
 MassSheet *MassSheets = NULL;
 int NMassSheets = 0;
+double *MassMapBoundaryZ = NULL;
+double *MassMapBoundaryChi = NULL;
+double *MassMapBoundaryDA = NULL;
 
 /* Epsilon for duplicate detection (user chose 1e-3) */
 #define MASS_MAPS_Z_EPS 1e-3
@@ -76,21 +79,39 @@ int mass_maps_init_sheets(void)
 
   NMassSheets = outputs.n - 1;
   MassSheets = (MassSheet *)malloc(sizeof(MassSheet) * NMassSheets);
+  MassMapBoundaryZ = (double *)malloc(sizeof(double) * outputs.n);
+  MassMapBoundaryChi = (double *)malloc(sizeof(double) * outputs.n);
+  MassMapBoundaryDA = (double *)malloc(sizeof(double) * outputs.n);
   if (!MassSheets)
   {
     if (!ThisTask)
       fprintf(stderr, "MASS_MAPS ERROR: Cannot allocate MassSheets (%d entries).\n", NMassSheets);
     return 1;
   }
+  if (!MassMapBoundaryZ || !MassMapBoundaryChi || !MassMapBoundaryDA)
+  {
+    if (!ThisTask)
+      fprintf(stderr, "MASS_MAPS ERROR: Cannot allocate boundary arrays (n=%d).\n", outputs.n);
+    return 1;
+  }
+
+  /* Fill boundary arrays */
+  for (int k = 0; k < outputs.n; ++k)
+  {
+    double z = outputs.z[k];
+    MassMapBoundaryZ[k] = z;
+    MassMapBoundaryChi[k] = ComovingDistance(z);
+    MassMapBoundaryDA[k] = DiameterDistance(z);
+  }
 
   for (int s = 0; s < NMassSheets; ++s)
   {
     MassSheet *ms = &MassSheets[s];
-    ms->z_hi = outputs.z[s];
-    ms->z_lo = outputs.z[s + 1];
+    ms->z_hi = MassMapBoundaryZ[s];
+    ms->z_lo = MassMapBoundaryZ[s + 1];
     ms->delta_z = ms->z_hi - ms->z_lo;
-    ms->chi_hi = ComovingDistance(ms->z_hi);
-    ms->chi_lo = ComovingDistance(ms->z_lo);
+    ms->chi_hi = MassMapBoundaryChi[s];
+    ms->chi_lo = MassMapBoundaryChi[s + 1];
     ms->delta_chi = ms->chi_hi - ms->chi_lo;
     if (!(ms->delta_chi > 0.0))
     {
@@ -99,6 +120,11 @@ int mass_maps_init_sheets(void)
       return 1;
     }
     ms->inv_dchi = 1.0 / ms->delta_chi;
+    ms->da_hi = MassMapBoundaryDA[s];
+    ms->da_lo = MassMapBoundaryDA[s + 1];
+    double chi_hi3 = ms->chi_hi * ms->chi_hi * ms->chi_hi;
+    double chi_lo3 = ms->chi_lo * ms->chi_lo * ms->chi_lo;
+    ms->chi3_diff = chi_hi3 - chi_lo3;
   }
 
   if (!ThisTask && internal.verbose_level >= VDIAG)
@@ -120,6 +146,13 @@ void mass_maps_free_sheets(void)
     free(MassSheets);
   MassSheets = NULL;
   NMassSheets = 0;
+  if (MassMapBoundaryZ)
+    free(MassMapBoundaryZ);
+  if (MassMapBoundaryChi)
+    free(MassMapBoundaryChi);
+  if (MassMapBoundaryDA)
+    free(MassMapBoundaryDA);
+  MassMapBoundaryZ = MassMapBoundaryChi = MassMapBoundaryDA = NULL;
 }
 
 int mass_maps_write_sheet_table(void)
@@ -138,11 +171,14 @@ int mass_maps_write_sheet_table(void)
     return 1;
   }
   fprintf(fd, "# Mass sheet definitions\n");
-  fprintf(fd, "# id z_hi z_lo delta_z chi_hi chi_lo delta_chi inv_delta_chi\n");
+  fprintf(fd, "# Columns:\n");
+  fprintf(fd, "#  %-3s %-10s %-10s %-10s %-12s %-12s %-12s %-14s %-12s %-12s %-12s\n",
+          "id", "z_hi", "z_lo", "delta_z", "chi_hi", "chi_lo", "delta_chi", "inv_delta_chi", "da_hi", "da_lo", "chi3_diff");
   for (int s = 0; s < NMassSheets; ++s)
   {
     MassSheet *ms = &MassSheets[s];
-    fprintf(fd, "%3d %.8f %.8f %.8f %.8f %.8f %.8f %.12g\n", s, ms->z_hi, ms->z_lo, ms->delta_z, ms->chi_hi, ms->chi_lo, ms->delta_chi, ms->inv_dchi);
+    fprintf(fd, "%3d %-10.8f %-10.8f %-10.8f %-12.8f %-12.8f %-12.8f %-14.12g %-12.8f %-12.8f %-12.8g\n",
+            s, ms->z_hi, ms->z_lo, ms->delta_z, ms->chi_hi, ms->chi_lo, ms->delta_chi, ms->inv_dchi, ms->da_hi, ms->da_lo, ms->chi3_diff);
   }
   fclose(fd);
   if (internal.verbose_level >= VDIAG)

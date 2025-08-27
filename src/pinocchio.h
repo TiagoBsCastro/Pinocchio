@@ -380,11 +380,16 @@ typedef struct
   double inv_dchi;       /* 1/(chi_hi - chi_lo) */
   double delta_z;        /* z_hi - z_lo */
   double delta_chi;      /* chi_hi - chi_lo */
+  double da_hi, da_lo;   /* angular diameter distances at boundaries */
+  double chi3_diff;      /* chi_hi^3 - chi_lo^3 */
 } MassSheet;
 
 extern MassSheet *MassSheets;
-extern int NMassSheets;          /* = outputs.n - 1 when MASS_MAPS active */
-int mass_maps_init_sheets(void); /* allocate & fill MassSheets; returns 0 on success */
+extern int NMassSheets;            /* = outputs.n - 1 when MASS_MAPS active */
+extern double *MassMapBoundaryZ;   /* length NMassSheets+1 (== outputs.n) */
+extern double *MassMapBoundaryChi; /* length NMassSheets+1 */
+extern double *MassMapBoundaryDA;  /* length NMassSheets+1 */
+int mass_maps_init_sheets(void);   /* allocate & fill MassSheets; returns 0 on success */
 void mass_maps_free_sheets(void);
 int mass_maps_write_sheet_table(void);
 #endif /* MASS_MAPS */
@@ -644,6 +649,7 @@ double GrowingMode_3LPT_1(double, double);
 double GrowingMode_3LPT_2(double, double);
 double InverseGrowingMode(double, int);
 double ComovingDistance(double);
+double DiameterDistance(double);
 double InverseComovingDistance(double);
 double dComovingDistance_dz(double);
 double PowerSpectrum(double);

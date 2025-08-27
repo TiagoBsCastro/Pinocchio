@@ -1852,6 +1852,8 @@ double ComovingDistance(double z)
 {
   /* comoving distance, interpolation on the grid
      Mpc */
+  if (z <= 0.0)
+    return 0.0; /* enforce exact zero at z=0 */
   double chi = my_spline_eval(SPLINE[SP_COMVDIST], -log10(1. + z), ACCEL[SP_COMVDIST]);
   /* Clamp any negative (spline end overshoot) to 0 for physical consistency */
   if (chi < 0.0)
@@ -1863,8 +1865,12 @@ double DiameterDistance(double z)
 {
   /* diameter distance, interpolation on the grid
      Mpc */
-
-  return my_spline_eval(SPLINE[SP_DIAMDIST], -log10(1. + z), ACCEL[SP_DIAMDIST]);
+  if (z <= 0.0)
+    return 0.0; /* enforce exact zero at z=0 */
+  double da = my_spline_eval(SPLINE[SP_DIAMDIST], -log10(1. + z), ACCEL[SP_DIAMDIST]);
+  if (da < 0.0)
+    da = 0.0; /* guard against tiny negative overshoot */
+  return da;
 }
 
 double SizeForMass(double m)
