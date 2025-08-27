@@ -1852,8 +1852,11 @@ double ComovingDistance(double z)
 {
   /* comoving distance, interpolation on the grid
      Mpc */
-
-  return my_spline_eval(SPLINE[SP_COMVDIST], -log10(1. + z), ACCEL[SP_COMVDIST]);
+  double chi = my_spline_eval(SPLINE[SP_COMVDIST], -log10(1. + z), ACCEL[SP_COMVDIST]);
+  /* Clamp any negative (spline end overshoot) to 0 for physical consistency */
+  if (chi < 0.0)
+    chi = 0.0;
+  return chi;
 }
 
 double DiameterDistance(double z)

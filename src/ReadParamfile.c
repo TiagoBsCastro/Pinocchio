@@ -253,20 +253,6 @@ int read_parameter_file()
     addr[nt] = &(params.use_transposed_fft);
     id[nt++] = LOGICAL;
 
-    /* Optional: number of mass planes for MASS_MAPS feature */
-    strcpy(tag[nt], "NumMassPlanes");
-    addr[nt] = &params.NumMassPlanes;
-    id[nt++] = INT_SKIP_DEF;
-
-    /* HEALPix mass map parameters */
-    strcpy(tag[nt], "MassMapNSIDE");
-    addr[nt] = &params.MassMapNSIDE;
-    id[nt++] = INT_SKIP_DEF;
-
-    strcpy(tag[nt], "MassMapMasterMaxGB");
-    addr[nt] = &params.MassMapMasterMaxGB;
-    id[nt++] = DOUBLE;
-
     strcpy(tag[nt], "MimicOldSeed");
     addr[nt] = &(internal.mimic_original_seedtable);
     id[nt++] = LOGICAL;
@@ -282,6 +268,13 @@ int read_parameter_file()
     strcpy(tag[nt], "VerboseLevel");
     addr[nt] = &(internal.verbose_level);
     id[nt++] = INT_SKIP_DEF;
+
+#ifdef MASS_MAPS
+  /* Mass maps parameters */
+  strcpy(tag[nt], "MassMapNSIDE");
+  addr[nt] = &params.MassMapNSIDE;
+  id[nt++] = INT_SKIP_DEF; /* required if MASS_MAPS active */
+#endif
 
     strcpy(tag[nt], "LargePlane");
     addr[nt] = &(internal.large_plane);
@@ -421,7 +414,7 @@ int read_parameter_file()
       return 2;
     }
 
-    /* Checks that all parameters are found */
+  /* Checks that all parameters are found */
     for (i = 0; i < nt; i++)
     {
       if (*tag[i])
@@ -437,99 +430,7 @@ int read_parameter_file()
       }
     }
 
-    /* Extra help for optional MASS_MAPS configuration */
-    /* Find the NumMassPlanes tag index to see if it was provided */
-    for (i = 0; i < nt; i++)
-      if (addr[i] == &params.NumMassPlanes)
-      {
-        idx_NumMassPlanes = i;
-        break;
-      }
-
-    for (i = 0; i < nt; i++)
-      if (addr[i] == &params.MassMapNSIDE)
-      {
-        idx_MassMapNSIDE = i;
-        break;
-      }
-    for (i = 0; i < nt; i++)
-      if (addr[i] == &params.MassMapMasterMaxGB)
-      {
-        idx_MassMapMasterMaxGB = i;
-        break;
-      }
-
-    if (idx_NumMassPlanes >= 0 && *tag[idx_NumMassPlanes])
-    {
-      /* Tag missing: silently default to 0 but inform the user clearly */
-      params.NumMassPlanes = 0;
-      printf("Info: parameter 'NumMassPlanes' not found in %s. Defaulting to 0 (mass maps disabled).\n",
-             params.ParameterFile);
-      fflush(stdout);
-    }
-
-    /* Do not silently default critical HEALPix parameters; enforce presence when feature used */
-
-#ifdef MASS_MAPS
-    if (params.NumMassPlanes <= 0)
-    {
-      printf("Info: MASS_MAPS is enabled but NumMassPlanes <= 0. No mass maps will be produced.\n");
-      printf("      To enable, add for example:  NumMassPlanes 16  in your parameter file.\n");
-      fflush(stdout);
-    }
-    if (params.NumMassPlanes > 0)
-    {
-      /* If user wants mass maps, enforce HEALPix parameters presence & validity */
-      if (idx_MassMapNSIDE >= 0 && *tag[idx_MassMapNSIDE])
-      {
-        printf("ERROR on task 0: Missing required parameter 'MassMapNSIDE' for HEALPix mass maps.\n");
-        fflush(stdout);
-        return 1;
-      }
-      if (idx_MassMapMasterMaxGB >= 0 && *tag[idx_MassMapMasterMaxGB])
-      {
-        printf("ERROR on task 0: Missing required parameter 'MassMapMasterMaxGB' (GB budget for master) for HEALPix mass maps.\n");
-        fflush(stdout);
-        return 1;
-      }
-      if (params.MassMapNSIDE <= 0)
-      {
-        printf("ERROR on task 0: MassMapNSIDE must be > 0 when NumMassPlanes > 0.\n");
-        fflush(stdout);
-        return 1;
-      }
-      if (params.MassMapMasterMaxGB <= 0.0)
-      {
-        printf("ERROR on task 0: MassMapMasterMaxGB must be > 0.\n");
-        fflush(stdout);
-        return 1;
-      }
-
-      /* Memory heuristic */
-      double nside = (double)params.MassMapNSIDE;
-      double npix = 12.0 * nside * nside;
-      double bytes_per_plane = npix * sizeof(double);
-      double gb_per_plane = bytes_per_plane / (1024.0 * 1024.0 * 1024.0);
-      if (ThisTask == 0)
-        printf("HEALPix mass maps: NSIDE=%d, per-plane memory=%.3f GB, master budget=%.3f GB\n", params.MassMapNSIDE, gb_per_plane, params.MassMapMasterMaxGB);
-      if (gb_per_plane > params.MassMapMasterMaxGB)
-      {
-        printf("ERROR on task 0: A single HEALPix mass plane (NSIDE=%d) needs %.3f GB which exceeds MassMapMasterMaxGB=%.3f GB.\n",
-               params.MassMapNSIDE, gb_per_plane, params.MassMapMasterMaxGB);
-        printf("            Lower NSIDE or increase MassMapMasterMaxGB.\n");
-        fflush(stdout);
-        return 1;
-      }
-      else if (gb_per_plane > 0.8 * params.MassMapMasterMaxGB)
-      {
-        printf("Notice: HEALPix plane memory %.3f GB is >80%% of MassMapMasterMaxGB=%.3f GB (proceeding).\n",
-               gb_per_plane, params.MassMapMasterMaxGB);
-        fflush(stdout);
-      }
-    }
-#endif
-
-    /* Now opens and reads the list of wanted outputs */
+  /* Now opens and reads the list of wanted outputs */
     outputs.n = 0;
     if ((fd = fopen(params.OutputList, "r")))
       while (!feof(fd))
@@ -563,6 +464,20 @@ int read_parameter_file()
     }
 
     params.GridSize[1] = params.GridSize[2] = params.GridSize[0];
+
+#ifdef MASS_MAPS
+    /* Validate MassMapNSIDE */
+    if (params.MassMapNSIDE <= 0) {
+      printf("ERROR on task 0: MassMapNSIDE must be > 0 when MASS_MAPS is compiled.\n");
+      fflush(stdout);
+      return 1;
+    }
+    if ( (params.MassMapNSIDE & (params.MassMapNSIDE - 1)) != 0) {
+      printf("ERROR on task 0: MassMapNSIDE=%d is not a power of two.\n", params.MassMapNSIDE);
+      fflush(stdout);
+      return 1;
+    }
+#endif
   }
 
   /* processor 0 broadcasts the parameters to all other processors */

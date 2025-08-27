@@ -51,9 +51,7 @@ PLCAperture            180          % cone aperture for the past light cone
 PLCProvideConeData                  % read vertex and direction of cone from paramter file
 PLCCenter 900 900 900               % cone vertex in the same coordinates as the BoxSize
 PLCAxis   0. 0. 1.                  % un-normalized direction of the cone axis
-NumMassPlanes          4            % number of mass planes to be constructed
 MassMapNSIDE           512          % NSIDE for healpix mass maps
-MassMapMasterMaxGB     2.0          % Extra memory for master storing the sheet
 
 
 # Table of collapseTime file, needed if the code is compiled with TABULATED_CT

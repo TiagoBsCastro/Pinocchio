@@ -1,0 +1,12 @@
+# 1) lower z for bin
+# 2) upper z for bin
+# 3) number of objects in bin
+# 4) number per square degree
+# 5) prediction for number of objects in bin
+#
+   0.000    0.050            1    0.000    0.0472502
+   0.050    0.100            0    0.000      0.23004
+   0.100    0.150            0    0.000     0.406672
+   0.150    0.200            1    0.000     0.499117
+   0.200    0.250            1    0.000      0.50467
+   0.250    0.300            3    0.000      0.45021

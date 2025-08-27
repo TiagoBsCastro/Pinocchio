@@ -368,6 +368,27 @@ typedef struct
 } subbox_data;
 extern subbox_data subbox;
 
+#ifdef MASS_MAPS
+/* ------------------------------------------------------------ */
+/* Mass sheet definitions derived from output redshift list     */
+/* Each consecutive pair (z_hi > z_lo) defines one sheet.       */
+/* ------------------------------------------------------------ */
+typedef struct
+{
+  double z_hi, z_lo;     /* redshift bounds (z_hi > z_lo) */
+  double chi_hi, chi_lo; /* comoving distances (same order) */
+  double inv_dchi;       /* 1/(chi_hi - chi_lo) */
+  double delta_z;        /* z_hi - z_lo */
+  double delta_chi;      /* chi_hi - chi_lo */
+} MassSheet;
+
+extern MassSheet *MassSheets;
+extern int NMassSheets;          /* = outputs.n - 1 when MASS_MAPS active */
+int mass_maps_init_sheets(void); /* allocate & fill MassSheets; returns 0 on success */
+void mass_maps_free_sheets(void);
+int mass_maps_write_sheet_table(void);
+#endif /* MASS_MAPS */
+
 typedef struct
 {
   double init, total, dens, fft, coll, invcoll, ell, vel, lpt, fmax, distr, sort, group, frag, io,

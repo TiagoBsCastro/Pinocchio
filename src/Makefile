@@ -50,6 +50,7 @@ OPTIONS += -DTHREE_LPT
 
 OPTIONS += -DPLC
 OPTIONS += -DMASS_MAPS
+OPTIONS += -DHAVE_CFITSIO
 
 # Dynamics of triaxial collapse #
 
@@ -223,7 +224,7 @@ endif
 
 # Include paths for libraries #
 
-INC =  $(PFFT_INCL) $(FFTW_INCL) $(MPI_INCL) $(GSL_INCL)
+INC =  $(PFFT_INCL) $(FFTW_INCL) $(MPI_INCL) $(GSL_INCL) 
 
 # Library flags #
 

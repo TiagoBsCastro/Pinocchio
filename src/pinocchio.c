@@ -250,6 +250,9 @@ int main(int argc, char **argv, char **envp)
   /* done */
   if (!ThisTask)
     printf("Pinocchio done!\n");
+#ifdef MASS_MAPS
+  mass_maps_free_sheets();
+#endif
   MPI_Finalize();
 
   return 0;

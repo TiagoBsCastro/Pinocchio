@@ -1,0 +1,9 @@
+# Group catalog for redshift 0.500000 and minimal mass of 10 particles
+#    1) group ID
+#    2) group mass (Msun/h)
+# 3- 5) initial position (Mpc/h)
+# 6- 8) final position (Mpc/h)
+# 9-11) velocity (km/s)
+#   12) number of particles
+#
+       901882  2.400431e+15     776.25      71.72    1718.44     778.28      71.07    1719.89     148.46     -11.61     101.79           10

@@ -116,6 +116,14 @@ int initialization()
     return 1;
 #endif
 
+#ifdef MASS_MAPS
+  /* initialize mass sheets (needs cosmology + outputs) */
+  if (mass_maps_init_sheets())
+    return 1;
+  /* write sheet table */
+  mass_maps_write_sheet_table();
+#endif
+
   /* checks that parameters and directives are coherent */
   if (check_parameters_and_directives())
     return 1;
