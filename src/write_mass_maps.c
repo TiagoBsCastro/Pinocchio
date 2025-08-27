@@ -347,6 +347,60 @@ static void mass_maps_select_segment_replications(int segment_index)
   }
 }
 
+/* ---------------------------------------------------------- */
+/* Displacement / position helpers                             */
+/* ---------------------------------------------------------- */
+/*
+ * mass_maps_compute_prev_curr_positions
+ * -------------------------------------
+ * For a given particle (pos_data), build its Eulerian positions at the
+ * previous segment endpoint and at the current segment endpoint, using the
+ * stored displacement components (v_prev / v and higher LPT orders) when
+ * RECOMPUTE_DISPLACEMENTS is active. These correspond to the two snapshots
+ * between which we test for PLC entry. The order argument controls how many
+ * LPT orders to include (1,2,3).
+ *
+ * NOTE: Replication shifts are NOT applied here; caller adds them per
+ * replication. Periodic wrapping is also left to the caller if required.
+ */
+static inline void mass_maps_compute_prev_curr_positions(const pos_data *p,
+                                                         double pos_prev[3],
+                                                         double pos_curr[3],
+                                                         int order)
+{
+  /* Sum displacements per order (endpoints: weights collapse to selecting
+     either *_prev or current components, so no interpolation weights used). */
+  for (int i = 0; i < 3; ++i)
+  {
+    double dp_prev = p->v_prev[i];
+    double dp_curr = p->v[i];
+#ifdef TWO_LPT
+    if (order > 1)
+    {
+      dp_prev += p->v2_prev[i];
+      dp_curr += p->v2[i];
+    }
+#ifdef THREE_LPT
+    if (order > 2)
+    {
+      dp_prev += p->v31_prev[i] + p->v32_prev[i];
+      dp_curr += p->v31[i] + p->v32[i];
+    }
+#endif /* THREE_LPT */
+#endif /* TWO_LPT */
+    pos_prev[i] = p->q[i] + dp_prev;
+    pos_curr[i] = p->q[i] + dp_curr;
+  }
+  /* Rescale from lattice units (grid cells) to physical box units using InterPartDist. */
+  double scale = params.InterPartDist; /* typical: BoxSize / GridSize */
+  pos_prev[0] *= scale;
+  pos_prev[1] *= scale;
+  pos_prev[2] *= scale;
+  pos_curr[0] *= scale;
+  pos_curr[1] *= scale;
+  pos_curr[2] *= scale;
+}
+
 /* Compute F = cos(theta) - cos(aperture) for a given position */
 /*
  * mass_maps_compute_F
@@ -522,13 +576,14 @@ int mass_maps_point_inside_lightcone(const double pos[3], long *ipix_out)
  */
 void mass_maps_process_segment(int segment_index, double z_segment, int is_first_segment)
 {
-#ifdef MASS_MAPS
   if (NMassSheets <= 0 || params.MassMapNSIDE <= 0)
     return; /* feature disabled or not initialized */
   if (is_first_segment)
     return; /* need previous segment for crossings */
+
   /* STEP 1: select replication candidates overlapping this segment radial span */
   mass_maps_select_segment_replications(segment_index);
+
   if (!ThisTask)
   {
     int show = MassMapSegmentReplicationCount < 10 ? MassMapSegmentReplicationCount : 10;
@@ -541,8 +596,6 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
       printf(" ...");
     printf("\n");
   }
-  /* Later steps will loop only over MassMapSegmentReplications[0..MassMapSegmentReplicationCount-1] */
-#endif /* MASS_MAPS */
 }
 
 #endif /* MASS_MAPS */
