@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <string.h>
 
 #ifndef PLC
 #error "MASS_MAPS requires PLC"
@@ -36,6 +37,11 @@ int NMassSheets = 0;
 double *MassMapBoundaryZ = NULL;
 double *MassMapBoundaryChi = NULL;
 double *MassMapBoundaryDA = NULL;
+/* HEALPix maps: one map per mass sheet (segment). */
+static int MassMapNSIDE_current = 0;
+static long MassMapNPIX = 0;
+static double *MassMapSegmentMaps = NULL;  /* length = NMassSheets * MassMapNPIX */
+static double *MassMapReduceBuffer = NULL; /* root-only temporary buffer for reductions */
 /* Per-segment replication candidate list (radial overlap with segment chi span) */
 static int *MassMapSegmentReplications = NULL;
 static int MassMapSegmentReplicationCount = 0;
@@ -200,6 +206,303 @@ void mass_maps_free_sheets(void)
   if (MassMapBoundaryDA)
     free(MassMapBoundaryDA);
   MassMapBoundaryZ = MassMapBoundaryChi = MassMapBoundaryDA = NULL;
+}
+
+/* ---------------------------------------------------------- */
+/* HEALPix map allocation (one map per mass sheet)            */
+/* ---------------------------------------------------------- */
+
+/* Return number of pixels for an NSIDE; avoid chealpix dependency in calc */
+static inline long mass_maps_npix_from_nside(int nside)
+{
+  return 12L * (long)nside * (long)nside;
+}
+
+/* Accessor: pointer to segment s map (size MassMapNPIX) */
+static inline double *mass_maps_segment_ptr(int s)
+{
+  if (!MassMapSegmentMaps || s < 0 || s >= NMassSheets)
+    return NULL;
+  return MassMapSegmentMaps + ((long)s) * MassMapNPIX;
+}
+
+/* Zero all maps */
+static void mass_maps_zero_all_maps(void)
+{
+  if (!MassMapSegmentMaps)
+    return;
+  long total = (long)NMassSheets * MassMapNPIX;
+  for (long i = 0; i < total; ++i)
+    MassMapSegmentMaps[i] = 0.0;
+}
+
+/* Free maps */
+void mass_maps_free_maps(void)
+{
+  if (MassMapSegmentMaps)
+    free(MassMapSegmentMaps);
+  MassMapSegmentMaps = NULL;
+  if (MassMapReduceBuffer)
+    free(MassMapReduceBuffer);
+  MassMapReduceBuffer = NULL;
+  MassMapNSIDE_current = 0;
+  MassMapNPIX = 0;
+}
+
+/* Ensure per-segment HEALPix maps are allocated for given NSIDE */
+int mass_maps_init_healpix_maps(int nside)
+{
+  if (nside <= 0)
+    return 1;
+  if (NMassSheets <= 0)
+    return 1;
+  if (MassMapSegmentMaps && MassMapNSIDE_current == nside)
+    return 0; /* already ready */
+
+  /* (Re)allocate */
+  mass_maps_free_maps();
+  MassMapNSIDE_current = nside;
+  MassMapNPIX = mass_maps_npix_from_nside(nside);
+  long total = (long)NMassSheets * MassMapNPIX;
+  MassMapSegmentMaps = (double *)malloc(sizeof(double) * (size_t)total);
+  if (!MassMapSegmentMaps)
+  {
+    if (!ThisTask)
+      fprintf(stderr, "MASS_MAPS ERROR: cannot allocate HEALPix maps (segments=%d npix=%ld total=%ld).\n", NMassSheets, MassMapNPIX, total);
+    MassMapNSIDE_current = 0;
+    MassMapNPIX = 0;
+    return 1;
+  }
+  mass_maps_zero_all_maps();
+
+  if (!ThisTask && internal.verbose_level >= VDIAG)
+    printf("[%s] MASS_MAPS: allocated HEALPix maps NSIDE=%d npix=%ld segments=%d\n", fdate(), nside, MassMapNPIX, NMassSheets);
+  return 0;
+}
+
+/* ---------------------------------------------------------- */
+/* PLC-oriented basis and pixelization helpers                */
+/* ---------------------------------------------------------- */
+
+/* Build an orthonormal basis (e1,e2,e3), with e3 = PLC axis (unit). */
+static inline void mass_maps_build_plc_basis(double e1[3], double e2[3], double e3[3])
+{
+  /* e3 = normalized PLC axis */
+  double a[3] = {plc.zvers[0], plc.zvers[1], plc.zvers[2]};
+  double anorm = sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+  if (anorm == 0.0)
+  {
+    e3[0] = 0;
+    e3[1] = 0;
+    e3[2] = 1;
+  }
+  else
+  {
+    e3[0] = a[0] / anorm;
+    e3[1] = a[1] / anorm;
+    e3[2] = a[2] / anorm;
+  }
+  /* choose a temporary vector not parallel to e3 */
+  double up[3] = {0.0, 0.0, 1.0};
+  double dot_up = e3[0] * up[0] + e3[1] * up[1] + e3[2] * up[2];
+  if (fabs(dot_up) > 0.9)
+  {
+    up[0] = 0.0;
+    up[1] = 1.0;
+    up[2] = 0.0;
+  }
+  /* e1 = normalize(up x e3) */
+  double cx1 = up[1] * e3[2] - up[2] * e3[1];
+  double cy1 = up[2] * e3[0] - up[0] * e3[2];
+  double cz1 = up[0] * e3[1] - up[1] * e3[0];
+  double n1 = sqrt(cx1 * cx1 + cy1 * cy1 + cz1 * cz1);
+  if (n1 == 0.0)
+  {
+    e1[0] = 1.0;
+    e1[1] = 0.0;
+    e1[2] = 0.0;
+  }
+  else
+  {
+    e1[0] = cx1 / n1;
+    e1[1] = cy1 / n1;
+    e1[2] = cz1 / n1;
+  }
+  /* e2 = e3 x e1 */
+  e2[0] = e3[1] * e1[2] - e3[2] * e1[1];
+  e2[1] = e3[2] * e1[0] - e3[0] * e1[2];
+  e2[2] = e3[0] * e1[1] - e3[1] * e1[0];
+}
+
+/* Compute HEALPix pixel for segment s at entry between Pprev/Pcurr using alpha in [0,1].
+   Orientation is defined by the PLC axis used for groups. Returns 1 on success, 0 on failure. */
+/* Debug helpers: compute simple stats and axis pixel id */
+static inline void mass_maps_map_stats(const double *map, long npix,
+                                       double *sum_out, double *min_out, double *max_out, long *nnz_out)
+{
+  double s = 0.0;
+  double mn = 0.0;
+  double mx = 0.0;
+  long nnz = 0;
+  if (npix > 0)
+  {
+    mn = mx = map[0];
+    for (long i = 0; i < npix; ++i)
+    {
+      double v = map[i];
+      s += v;
+      if (v < mn)
+        mn = v;
+      if (v > mx)
+        mx = v;
+      if (v != 0.0)
+        nnz++;
+    }
+  }
+  if (sum_out)
+    *sum_out = s;
+  if (min_out)
+    *min_out = mn;
+  if (max_out)
+    *max_out = mx;
+  if (nnz_out)
+    *nnz_out = nnz;
+}
+
+static inline long mass_maps_axis_pixel_ring(int nside)
+{
+  long pix = -1;
+  ang2pix_ring((long)nside, 0.0, 0.0, &pix); /* theta=0 on PLC axis */
+  return pix;
+}
+
+/* Compute HEALPix pixel directly from an absolute position (phys units) */
+int mass_maps_compute_pixel_from_pos(const double pos[3], int nside, int nest, long *pix_out)
+{
+  if (!pix_out || nside <= 0)
+    return 0;
+  double c0 = plc.center[0] * params.InterPartDist;
+  double c1 = plc.center[1] * params.InterPartDist;
+  double c2 = plc.center[2] * params.InterPartDist;
+  double vx = pos[0] - c0;
+  double vy = pos[1] - c1;
+  double vz = pos[2] - c2;
+  double vnorm = sqrt(vx * vx + vy * vy + vz * vz);
+  if (vnorm == 0.0)
+    return 0;
+  double invv = 1.0 / vnorm;
+  double vhat[3] = {vx * invv, vy * invv, vz * invv};
+  double e1[3], e2[3], e3[3];
+  mass_maps_build_plc_basis(e1, e2, e3);
+  double cos_theta = vhat[0] * e3[0] + vhat[1] * e3[1] + vhat[2] * e3[2];
+  if (cos_theta > 1.0)
+    cos_theta = 1.0;
+  else if (cos_theta < -1.0)
+    cos_theta = -1.0;
+  double theta = acos(cos_theta);
+  double x1 = vhat[0] * e1[0] + vhat[1] * e1[1] + vhat[2] * e1[2];
+  double y1 = vhat[0] * e2[0] + vhat[1] * e2[1] + vhat[2] * e2[2];
+  double phi = atan2(y1, x1);
+  if (phi < 0.0)
+  {
+    double twopi = 2.0 * acos(-1.0);
+    phi += twopi;
+  }
+  long ipix = -1;
+  if (nest)
+    ang2pix_nest((long)nside, theta, phi, &ipix);
+  else
+    ang2pix_ring((long)nside, theta, phi, &ipix);
+  if (ipix < 0)
+    return 0;
+  *pix_out = ipix;
+  return 1;
+}
+
+/* Accumulate a unit weight into the HEALPix map for segment s at the interpolated entry point */
+static inline void mass_maps_accumulate_entry_pos(int s,
+                                                  const double entry_pos[3],
+                                                  double weight)
+{
+  if (s < 0 || s >= NMassSheets || MassMapNSIDE_current <= 0)
+    return;
+  long ipix;
+  if (!mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, 0 /*RING*/, &ipix))
+    return;
+  double *map = mass_maps_segment_ptr(s);
+  if (!map)
+    return;
+  map[ipix] += weight;
+}
+
+/* Write a single segment's HEALPix map (RING ordering) to a FITS file on task 0 */
+int mass_maps_write_segment_map(int s)
+{
+  if (ThisTask != 0)
+    return 0;
+  if (s < 0 || s >= NMassSheets)
+    return 1;
+  if (!MassMapSegmentMaps || MassMapNSIDE_current <= 0 || MassMapNPIX <= 0)
+    return 1;
+
+  char fname[3 * LBLENGTH];
+  snprintf(fname, sizeof(fname), "pinocchio.%s.massmap.seg%03d.fits", params.RunFlag, s);
+  char fitsname[3 * LBLENGTH + 2];
+  snprintf(fitsname, sizeof(fitsname), "!%s", fname); /* overwrite if exists */
+
+  fitsfile *fptr = NULL;
+  int status = 0;
+  long naxes[1];
+  naxes[0] = MassMapNPIX;
+  double *map = mass_maps_segment_ptr(s);
+  if (!map)
+    return 1;
+
+  fits_create_file(fptr ? &fptr : &fptr, fitsname, &status);
+  if (status)
+  {
+    fits_report_error(stderr, status);
+    return 1;
+  }
+  fits_create_img(fptr, DOUBLE_IMG, 1, naxes, &status);
+  if (status)
+  {
+    fits_report_error(stderr, status);
+    fits_close_file(fptr, &status);
+    return 1;
+  }
+
+  /* HEALPix metadata */
+  char pixtype[] = "HEALPIX";
+  char ordering[] = "RING";
+  fits_update_key(fptr, TSTRING, "PIXTYPE", pixtype, "HEALPix pixelisation", &status);
+  fits_update_key(fptr, TSTRING, "ORDERING", ordering, "Pixel ordering scheme (RING/NESTED)", &status);
+  fits_update_key(fptr, TINT, "NSIDE", &MassMapNSIDE_current, "HEALPix NSIDE", &status);
+  long firstpix = 0;
+  long lastpix = MassMapNPIX - 1;
+  fits_update_key(fptr, TLONG, "FIRSTPIX", &firstpix, "First pixel number (0-based)", &status);
+  fits_update_key(fptr, TLONG, "LASTPIX", &lastpix, "Last pixel number (0-based)", &status);
+
+  /* Write data */
+  long fpixel = 1; /* FITS 1-based */
+  long nelem = MassMapNPIX;
+  fits_write_img(fptr, TDOUBLE, fpixel, nelem, map, &status);
+  if (status)
+  {
+    fits_report_error(stderr, status);
+    fits_close_file(fptr, &status);
+    return 1;
+  }
+
+  fits_close_file(fptr, &status);
+  if (status)
+  {
+    fits_report_error(stderr, status);
+    return 1;
+  }
+  if (internal.verbose_level >= VDIAG)
+    printf("[%s] MASS_MAPS: wrote %s (NSIDE=%d NPIX=%ld)\n", fdate(), fname, MassMapNSIDE_current, MassMapNPIX);
+  return 0;
 }
 
 /*
@@ -595,11 +898,11 @@ int mass_maps_particle_sign_change(int rep_id,
   int ii = plc.repls[rep_id].i;
   int jj = plc.repls[rep_id].j;
   int kk = plc.repls[rep_id].k;
-  /* Replication shift in physical units: integer box counts times InterPartDist */
-  double shift[3] = {
-      (ii * MyGrids[0].GSglobal[_x_] + subbox.stabl[_x_]) * params.InterPartDist,
-      (jj * MyGrids[0].GSglobal[_y_] + subbox.stabl[_y_]) * params.InterPartDist,
-      (kk * MyGrids[0].GSglobal[_z_] + subbox.stabl[_z_]) * params.InterPartDist};
+  /* Replication shift in physical units: integer global box counts only (no subbox offsets) */
+  double Bx = MyGrids[0].GSglobal[_x_] * params.InterPartDist;
+  double By = MyGrids[0].GSglobal[_y_] * params.InterPartDist;
+  double Bz = MyGrids[0].GSglobal[_z_] * params.InterPartDist;
+  double shift[3] = {ii * Bx, jj * By, kk * Bz};
 
   /* If q==0 vector, treat disp_* as absolute positions (already q+dp). Otherwise treat as displacements relative to q. */
   int q_is_zero = (q[0] == 0.0 && q[1] == 0.0 && q[2] == 0.0);
@@ -710,6 +1013,16 @@ int mass_maps_particle_sign_change(int rep_id,
  */
 void mass_maps_process_segment(int segment_index, double z_segment, int is_first_segment)
 {
+  /* One-time HEALPix map allocator */
+  {
+    static int hpix_init_done = 0;
+    if (!hpix_init_done)
+    {
+      if (params.MassMapNSIDE > 0)
+        mass_maps_init_healpix_maps(params.MassMapNSIDE);
+      hpix_init_done = 1;
+    }
+  }
   /* One-time units diagnostic to stdout */
   if (!ThisTask && internal.verbose_level >= VDIAG)
   {
@@ -767,12 +1080,6 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
   /* Segment endpoint redshifts */
   double z_prev = ScaleDep.z[segment_index - 1];
   double z_curr = z_segment; /* expected to be ScaleDep.z[segment_index] */
-  /* Precompute chi at segment endpoints and PLC center in physical units */
-  double chi_prev_val = ComovingDistance(z_prev);
-  double chi_curr_val = ComovingDistance(z_curr);
-  double c0_phys = plc.center[0] * params.InterPartDist;
-  double c1_phys = plc.center[1] * params.InterPartDist;
-  double c2_phys = plc.center[2] * params.InterPartDist;
 
   /* Determine LPT order compiled in */
   int lpt_order = 1;
@@ -783,8 +1090,18 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
 #endif
 #endif
 
-  /* We'll count local crossings per replication for diagnostics */
+  /* We'll count local crossings per replication and reduce globally */
   unsigned long long total_crossings_all_reps = 0ULL;
+  unsigned long long total_crossings_all_reps_global = 0ULL;
+  /* Store local per-rep counts to reduce in one shot */
+  unsigned long long *rep_crossings_local = NULL;
+  unsigned long long *rep_crossings_global = NULL;
+  if (MassMapSegmentReplicationCount > 0)
+  {
+    rep_crossings_local = (unsigned long long *)calloc(MassMapSegmentReplicationCount, sizeof(unsigned long long));
+    if (!ThisTask)
+      rep_crossings_global = (unsigned long long *)calloc(MassMapSegmentReplicationCount, sizeof(unsigned long long));
+  }
 
   /* Precompute scale factor F for set_point (1+z at current segment) */
   PRODFLOAT Fseg = (PRODFLOAT)(z_segment + 1.0);
@@ -800,15 +1117,7 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
     unsigned long long rep_crossings = 0ULL;
     /* Count entries using the user's condition only */
 
-    /* BoxSize per-axis in physical units */
-    double Bx = MyGrids[0].GSglobal[_x_] * params.InterPartDist;
-    double By = MyGrids[0].GSglobal[_y_] * params.InterPartDist;
-    double Bz = MyGrids[0].GSglobal[_z_] * params.InterPartDist;
-
-    int ii = plc.repls[rep_id].i;
-    int jj = plc.repls[rep_id].j;
-    int kk = plc.repls[rep_id].k;
-    double shift[3] = {ii * Bx, jj * By, kk * Bz};
+    /* Replication shift handled inside mass_maps_particle_sign_change */
 
     for (int ig = (int)MyGrids[0].GSstart[_x_]; ig < (int)(MyGrids[0].GSstart[_x_] + MyGrids[0].GSlocal[_x_]); ++ig)
     {
@@ -826,32 +1135,102 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
           double pos_prev[3], pos_curr[3];
           mass_maps_compute_prev_curr_positions(&obj, pos_prev, pos_curr, lpt_order);
 
-          /* Apply replication shift (global positions -> replicated positions) */
-          double Pprev[3] = {pos_prev[0] + shift[0], pos_prev[1] + shift[1], pos_prev[2] + shift[2]};
-          double Pcurr[3] = {pos_curr[0] + shift[0], pos_curr[1] + shift[1], pos_curr[2] + shift[2]};
-
-          /* Compute r_prev/r_curr in physical units (wrt PLC center) */
-          double dx0 = Pprev[0] - c0_phys, dy0 = Pprev[1] - c1_phys, dz0 = Pprev[2] - c2_phys;
-          double dx1 = Pcurr[0] - c0_phys, dy1 = Pcurr[1] - c1_phys, dz1 = Pcurr[2] - c2_phys;
-          double r_prev = sqrt(dx0 * dx0 + dy0 * dy0 + dz0 * dz0);
-          double r_curr = sqrt(dx1 * dx1 + dy1 * dy1 + dz1 * dz1);
-          /* User's shell selection: r_prev < chi_prev and r_curr > chi_curr */
-          if (!(r_prev < chi_prev_val && r_curr > chi_curr_val))
+          /* Use robust crossing helper to get alpha and entry (avoid double shift):
+            pass q (phys) and displacements (phys) from unshifted positions; helper adds replication shift. */
+          double entry_pos[3];
+          double q_phys[3] = {(obj.q[0]) * params.InterPartDist,
+                              (obj.q[1]) * params.InterPartDist,
+                              (obj.q[2]) * params.InterPartDist};
+          double disp_prev_phys[3] = {pos_prev[0] - q_phys[0],
+                                      pos_prev[1] - q_phys[1],
+                                      pos_prev[2] - q_phys[2]};
+          double disp_curr_phys[3] = {pos_curr[0] - q_phys[0],
+                                      pos_curr[1] - q_phys[1],
+                                      pos_curr[2] - q_phys[2]};
+          if (!mass_maps_particle_sign_change(rep_id, q_phys, disp_prev_phys, disp_curr_phys, z_prev, z_curr, NULL, entry_pos))
             continue;
 
           ++rep_crossings;
+          /* Accumulate into segment map using the entry position returned by the helper */
+          int s_map = segment_index - 1;
+          if (s_map >= 0 && s_map < NMassSheets)
+            mass_maps_accumulate_entry_pos(s_map, entry_pos, 1.0);
         }
       }
     }
 
     total_crossings_all_reps += rep_crossings;
+    if (rep_crossings_local)
+      rep_crossings_local[ir] = rep_crossings;
     if (!ThisTask && internal.verbose_level >= VDIAG)
       printf("[%s] MASS_MAPS(products): segment %d rep %d local entries %llu\n", fdate(), segment_index, rep_id, rep_crossings);
   }
 
+  /* Reduce per-rep and total counts across tasks */
+  if (MassMapSegmentReplicationCount > 0)
+  {
+    /* Per-rep reductions (only if allocations succeeded) */
+    if (rep_crossings_local)
+    {
+      MPI_Reduce(rep_crossings_local, rep_crossings_global,
+                 MassMapSegmentReplicationCount, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    }
+    /* Total across reps */
+    unsigned long long local_total = total_crossings_all_reps;
+    MPI_Reduce(&local_total, &total_crossings_all_reps_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+  }
+
   if (!ThisTask && internal.verbose_level >= VDIAG)
+  {
     printf("[%s] MASS_MAPS(products): segment %d total local entries across %d reps: %llu\n",
            fdate(), segment_index, MassMapSegmentReplicationCount, total_crossings_all_reps);
+    printf("[%s] MASS_MAPS(products): segment %d total global entries across %d reps: %llu\n",
+           fdate(), segment_index, MassMapSegmentReplicationCount, total_crossings_all_reps_global);
+  }
+
+  /* Reduce the segment map to root (task 0) */
+  if (MassMapNSIDE_current > 0)
+  {
+    int s_map = segment_index - 1;
+    if (s_map >= 0 && s_map < NMassSheets)
+    {
+      double *map_local = mass_maps_segment_ptr(s_map);
+      if (!ThisTask)
+      {
+        if (!MassMapReduceBuffer)
+          MassMapReduceBuffer = (double *)malloc(sizeof(double) * (size_t)MassMapNPIX);
+      }
+      MPI_Reduce(map_local,
+                 (!ThisTask ? MassMapReduceBuffer : NULL),
+                 (int)MassMapNPIX,
+                 MPI_DOUBLE,
+                 MPI_SUM,
+                 0,
+                 MPI_COMM_WORLD);
+      if (!ThisTask && MassMapReduceBuffer)
+      {
+        /* Copy reduced result back into the segment map on root */
+        memcpy(map_local, MassMapReduceBuffer, sizeof(double) * (size_t)MassMapNPIX);
+        /* Write to FITS */
+        mass_maps_write_segment_map(s_map);
+        if (internal.verbose_level >= VDIAG)
+        {
+          double sum, vmin, vmax;
+          long nnz;
+          mass_maps_map_stats(map_local, MassMapNPIX, &sum, &vmin, &vmax, &nnz);
+          long axis_pix = mass_maps_axis_pixel_ring(MassMapNSIDE_current);
+          double axis_val = (axis_pix >= 0 && axis_pix < MassMapNPIX) ? map_local[axis_pix] : -1.0;
+          printf("[%s] MASS_MAPS(diag): seg %d map stats: sum=%.0f nnz=%ld min=%.0f max=%.0f axis_pix=%ld axis_val=%.0f\n",
+                 fdate(), s_map, sum, nnz, vmin, vmax, axis_pix, axis_val);
+        }
+      }
+    }
+  }
+
+  if (rep_crossings_local)
+    free(rep_crossings_local);
+  if (rep_crossings_global)
+    free(rep_crossings_global);
   return; /* products path handled this segment */
 }
 
