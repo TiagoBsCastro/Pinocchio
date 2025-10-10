@@ -1,4 +1,36 @@
-/* MASS_MAPS minimal diagnostics skeleton (clean rewrite) */
+/*
+ * MASS_MAPS module (products-only, per-segment PLC entries → HEALPix maps)
+ * -----------------------------------------------------------------------
+ * Purpose:
+ *   Detect entries of mass elements into a light-cone (PLC) between adjacent
+ *   fragmentation outputs and accumulate counts on per-segment HEALPix maps.
+ *
+ * Data flow (per segment):
+ *   - Build candidate replications by radial overlap with segment chi-span.
+ *   - Optionally cull Lagrangian sub-volumes (blocks) using Eulerian AABBs
+ *     against the PLC shell; precompute per-block prev/curr AABBs.
+ *   - For each relevant replication, test the user crossing condition
+ *     H_prev = chi_prev − r_prev, H_curr = chi_curr − r_curr and linearly
+ *     interpolate the entry position on success.
+ *   - Pixelize the entry on the sky using a PLC-aligned basis and increment
+ *     the segment’s HEALPix map.
+ *   - MPI-reduce per-rep counters and the map to rank 0 and write FITS.
+ *
+ * Performance notes:
+ *   - Culling reduces work by skipping blocks whose AABB (shifted by a given
+ *     replication) cannot intersect the segment’s radial shell.
+ *   - OpenMP parallelizes the per-block traversal as well as the fallback
+ *     triple loops; map updates use atomic increments for correctness.
+ *   - Potential hotspots and future work are annotated inline with TODOs.
+ *
+ * Environment knobs:
+ *   MASS_MAPS_BLOCKS[_X|_Y|_Z]: number of Lagrangian blocks per axis (>=1)
+ *   MASS_MAPS_CULL_PAD_PHYS:    padding (phys units) added to block AABBs
+ *
+ * Accuracy contract:
+ *   All refactors preserve the user-specified crossing criterion and output
+ *   accumulation semantics. Any optimization must not change results.
+ */
 #include "pinocchio.h"
 #ifdef MASS_MAPS
 #include <math.h>
@@ -6,6 +38,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 #ifndef PLC
 #error "MASS_MAPS requires PLC"
@@ -22,10 +55,24 @@
 #ifdef MASS_MAPS
 #include <chealpix.h>
 #endif
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 /* Local constants */
 #ifndef MASS_MAPS_Z_EPS
 #define MASS_MAPS_Z_EPS 1e-8
+#endif
+/* Crossing epsilon for alpha denominator */
+#ifndef MASS_MAPS_F_EPS
+#define MASS_MAPS_F_EPS 1e-7
+#endif
+/* Culling defaults  */
+#ifndef MASS_MAPS_BLOCKS
+#define MASS_MAPS_BLOCKS 8
+#endif
+#ifndef MASS_MAPS_CULL_PAD_PHYS
+#define MASS_MAPS_CULL_PAD_PHYS 0.1
 #endif
 
 /* Forward decls for helpers provided elsewhere */
@@ -46,6 +93,27 @@ static double *MassMapReduceBuffer = NULL; /* root-only temporary buffer for red
 static int *MassMapSegmentReplications = NULL;
 static int MassMapSegmentReplicationCount = 0;
 static int MassMapSegmentReplicationsCapacity = 0;
+
+/* Cached PLC center (phys) and sky basis (e1,e2,e3) for pixelization */
+static double MassMapPLC_CenterPhys[3] = {0.0, 0.0, 0.0};
+static double MassMapPLC_e1[3] = {1.0, 0.0, 0.0};
+static double MassMapPLC_e2[3] = {0.0, 1.0, 0.0};
+static double MassMapPLC_e3[3] = {0.0, 0.0, 1.0};
+static int MassMapPLC_BasisReady = 0;
+
+/* Forward declaration: PLC basis builder (defined later in this file) */
+static inline void mass_maps_build_plc_basis(double e1[3], double e2[3], double e3[3]);
+
+static inline void mass_maps_cache_plc_basis_and_center(void)
+{
+  if (MassMapPLC_BasisReady)
+    return;
+  MassMapPLC_CenterPhys[0] = plc.center[0] * params.InterPartDist;
+  MassMapPLC_CenterPhys[1] = plc.center[1] * params.InterPartDist;
+  MassMapPLC_CenterPhys[2] = plc.center[2] * params.InterPartDist;
+  mass_maps_build_plc_basis(MassMapPLC_e1, MassMapPLC_e2, MassMapPLC_e3);
+  MassMapPLC_BasisReady = 1;
+}
 /*
  * mass_maps_init_sheets
  * ---------------------
@@ -376,24 +444,155 @@ static inline long mass_maps_axis_pixel_ring(int nside)
   return pix;
 }
 
+/* Fast crossing test from absolute, replication-shifted positions with precomputed chi */
+static inline int mass_maps_crossing_from_shifted_positions(const double Pprev[3],
+                                                            const double Pcurr[3],
+                                                            const double c_phys[3],
+                                                            double chi_prev,
+                                                            double chi_curr,
+                                                            double *alpha_out,
+                                                            double entry_pos[3])
+{
+  /* Distances to PLC center */
+  double dx0 = Pprev[0] - c_phys[0];
+  double dy0 = Pprev[1] - c_phys[1];
+  double dz0 = Pprev[2] - c_phys[2];
+  double dx1 = Pcurr[0] - c_phys[0];
+  double dy1 = Pcurr[1] - c_phys[1];
+  double dz1 = Pcurr[2] - c_phys[2];
+  double r_prev = sqrt(dx0 * dx0 + dy0 * dy0 + dz0 * dz0);
+  double r_curr = sqrt(dx1 * dx1 + dy1 * dy1 + dz1 * dz1);
+  double H_prev = chi_prev - r_prev;
+  double H_curr = chi_curr - r_curr;
+  if (!(H_prev > 0.0 && H_curr <= 0.0))
+    return 0;
+  double denom = H_prev - H_curr;
+  if (fabs(denom) < MASS_MAPS_F_EPS)
+    return 0;
+  double alpha = H_prev / denom;
+  if (alpha < 0.0)
+    alpha = 0.0;
+  else if (alpha > 1.0)
+    alpha = 1.0;
+  if (alpha_out)
+    *alpha_out = alpha;
+  if (entry_pos)
+  {
+    entry_pos[0] = Pprev[0] + alpha * (Pcurr[0] - Pprev[0]);
+    entry_pos[1] = Pprev[1] + alpha * (Pcurr[1] - Pprev[1]);
+    entry_pos[2] = Pprev[2] + alpha * (Pcurr[2] - Pprev[2]);
+  }
+  return 1;
+}
+
+/* ---------------------------------------------------------- */
+/* Lagrangian sub-volume culling helpers (AABB vs PLC shell)  */
+/* ---------------------------------------------------------- */
+
+typedef struct
+{
+  double min_all[3];
+  double max_all[3];
+  int initialized;
+} BlockBounds;
+
+static inline void bounds_init(BlockBounds *b)
+{
+  b->min_all[0] = b->min_all[1] = b->min_all[2] = 1e300;
+  b->max_all[0] = b->max_all[1] = b->max_all[2] = -1e300;
+  b->initialized = 0;
+}
+
+static inline void bounds_accumulate(BlockBounds *b, const double p_prev[3], const double p_curr[3])
+{
+  for (int a = 0; a < 3; ++a)
+  {
+    double mn = p_prev[a] < p_curr[a] ? p_prev[a] : p_curr[a];
+    double mx = p_prev[a] > p_curr[a] ? p_prev[a] : p_curr[a];
+    if (mn < b->min_all[a])
+      b->min_all[a] = mn;
+    if (mx > b->max_all[a])
+      b->max_all[a] = mx;
+  }
+  b->initialized = 1;
+}
+
+static inline void bounds_pad(BlockBounds *b, double pad)
+{
+  if (pad <= 0.0)
+    return;
+  for (int a = 0; a < 3; ++a)
+  {
+    b->min_all[a] -= pad;
+    b->max_all[a] += pad;
+  }
+}
+
+/* Compute tight lower/upper bounds for distance from point c to an AABB [min,max] */
+static inline void aabb_distance_bounds_to_point(const double minv[3], const double maxv[3], const double c[3], double *dmin_out, double *dmax_out)
+{
+  /* d_min: point-to-box distance */
+  double d2min = 0.0;
+  for (int a = 0; a < 3; ++a)
+  {
+    double da = 0.0;
+    if (c[a] < minv[a])
+      da = minv[a] - c[a];
+    else if (c[a] > maxv[a])
+      da = c[a] - maxv[a];
+    d2min += da * da;
+  }
+  /* d_max: farthest corner distance */
+  double d2max = 0.0;
+  for (int a = 0; a < 3; ++a)
+  {
+    double da0 = fabs(minv[a] - c[a]);
+    double da1 = fabs(maxv[a] - c[a]);
+    double da = (da0 > da1) ? da0 : da1;
+    d2max += da * da;
+  }
+  if (dmin_out)
+    *dmin_out = sqrt(d2min);
+  if (dmax_out)
+    *dmax_out = sqrt(d2max);
+}
+
+/* Read integer env var with default fallback; returns >=0 (0 means disabled) */
+static inline int getenv_int_default(const char *name, int defval)
+{
+  const char *v = getenv(name);
+  if (!v || !*v)
+    return defval;
+  int val = atoi(v);
+  return val < 0 ? defval : val;
+}
+
+static inline double getenv_double_default(const char *name, double defval)
+{
+  const char *v = getenv(name);
+  if (!v || !*v)
+    return defval;
+  return atof(v);
+}
+
 /* Compute HEALPix pixel directly from an absolute position (phys units) */
 int mass_maps_compute_pixel_from_pos(const double pos[3], int nside, int nest, long *pix_out)
 {
   if (!pix_out || nside <= 0)
     return 0;
-  double c0 = plc.center[0] * params.InterPartDist;
-  double c1 = plc.center[1] * params.InterPartDist;
-  double c2 = plc.center[2] * params.InterPartDist;
-  double vx = pos[0] - c0;
-  double vy = pos[1] - c1;
-  double vz = pos[2] - c2;
+  /* Cache center/basis once per process to avoid recomputing in hot paths */
+  mass_maps_cache_plc_basis_and_center();
+  double vx = pos[0] - MassMapPLC_CenterPhys[0];
+  double vy = pos[1] - MassMapPLC_CenterPhys[1];
+  double vz = pos[2] - MassMapPLC_CenterPhys[2];
   double vnorm = sqrt(vx * vx + vy * vy + vz * vz);
   if (vnorm == 0.0)
     return 0;
   double invv = 1.0 / vnorm;
   double vhat[3] = {vx * invv, vy * invv, vz * invv};
-  double e1[3], e2[3], e3[3];
-  mass_maps_build_plc_basis(e1, e2, e3);
+  const double *e1 = MassMapPLC_e1;
+  const double *e2 = MassMapPLC_e2;
+  const double *e3 = MassMapPLC_e3;
   double cos_theta = vhat[0] * e3[0] + vhat[1] * e3[1] + vhat[2] * e3[2];
   if (cos_theta > 1.0)
     cos_theta = 1.0;
@@ -549,8 +748,6 @@ int mass_maps_write_sheet_table(void)
 /* ---------------------------------------------------------- */
 /* Auxiliary geometry / crossing utilities (minimal version) */
 /* ---------------------------------------------------------- */
-
-#define MASS_MAPS_F_EPS 1e-7
 
 /* Test if a replication radial interval overlaps sheet radial interval */
 /*
@@ -1080,6 +1277,15 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
   /* Segment endpoint redshifts */
   double z_prev = ScaleDep.z[segment_index - 1];
   double z_curr = z_segment; /* expected to be ScaleDep.z[segment_index] */
+  /* Segment chi bounds */
+  double chi_prev_seg = ComovingDistance(z_prev);
+  double chi_curr_seg = ComovingDistance(z_curr);
+  double seg_chi_min = chi_prev_seg < chi_curr_seg ? chi_prev_seg : chi_curr_seg;
+  double seg_chi_max = chi_prev_seg > chi_curr_seg ? chi_prev_seg : chi_curr_seg;
+  /* PLC center (phys) */
+  double c_phys[3] = {plc.center[0] * params.InterPartDist,
+                      plc.center[1] * params.InterPartDist,
+                      plc.center[2] * params.InterPartDist};
 
   /* Determine LPT order compiled in */
   int lpt_order = 1;
@@ -1106,65 +1312,420 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
   /* Precompute scale factor F for set_point (1+z at current segment) */
   PRODFLOAT Fseg = (PRODFLOAT)(z_segment + 1.0);
 
-  /* Products-tile traversal is now the only path */
-  /*
-   * PRODUCTS-TILE PATH: cover all grid elements in this task's FFT tile.
-   * Iterate over global lattice coords owned by this rank and read from products[].
-   */
-  for (int ir = 0; ir < MassMapSegmentReplicationCount; ++ir)
+  /* Optional: Lagrangian sub-volume culling setup */
+  int blocks_all = getenv_int_default("MASS_MAPS_BLOCKS", MASS_MAPS_BLOCKS);
+  int blocks_x = getenv_int_default("MASS_MAPS_BLOCKS_X", blocks_all);
+  int blocks_y = getenv_int_default("MASS_MAPS_BLOCKS_Y", blocks_all);
+  int blocks_z = getenv_int_default("MASS_MAPS_BLOCKS_Z", blocks_all);
+  double cull_pad = getenv_double_default("MASS_MAPS_CULL_PAD_PHYS", MASS_MAPS_CULL_PAD_PHYS);
+  int nx_local = (int)MyGrids[0].GSlocal[_x_];
+  int ny_local = (int)MyGrids[0].GSlocal[_y_];
+  int nz_local = (int)MyGrids[0].GSlocal[_z_];
+  int gx_start = (int)MyGrids[0].GSstart[_x_];
+  int gy_start = (int)MyGrids[0].GSstart[_y_];
+  int gz_start = (int)MyGrids[0].GSstart[_z_];
+  /* Cap blocks to local sizes */
+  if (blocks_x > nx_local)
+    blocks_x = nx_local;
+  if (blocks_y > ny_local)
+    blocks_y = ny_local;
+  if (blocks_z > nz_local)
+    blocks_z = nz_local;
+  int culling_enabled = (blocks_x > 0 && blocks_y > 0 && blocks_z > 0);
+  if (!ThisTask && internal.verbose_level >= VDIAG)
   {
-    int rep_id = MassMapSegmentReplications[ir];
-    unsigned long long rep_crossings = 0ULL;
-    /* Count entries using the user's condition only */
+    printf("[%s] MASS_MAPS culling: blocks=(%d,%d,%d) pad=%.3g enabled=%d\n",
+           fdate(), blocks_x, blocks_y, blocks_z, cull_pad, culling_enabled);
+  }
 
-    /* Replication shift handled inside mass_maps_particle_sign_change */
-
-    for (int ig = (int)MyGrids[0].GSstart[_x_]; ig < (int)(MyGrids[0].GSstart[_x_] + MyGrids[0].GSlocal[_x_]); ++ig)
+  /* Precompute per-block Eulerian AABBs for prev/curr positions (union), if enabled)
+   * Hotspot note: This pre-pass is O(N_local) and can be parallelized if it
+   * becomes dominant; currently left serial to avoid extra memory traffic.
+   * TODO(perf): parallelize with OpenMP and per-thread local bounds, then merge.
+   */
+  BlockBounds *blk = NULL;
+  int *edge_x = NULL, *edge_y = NULL, *edge_z = NULL;
+  int nbx = 0, nby = 0, nbz = 0;
+  if (culling_enabled)
+  {
+    nbx = blocks_x;
+    nby = blocks_y;
+    nbz = blocks_z;
+    long nblocks = (long)nbx * (long)nby * (long)nbz;
+    blk = (BlockBounds *)malloc(sizeof(BlockBounds) * (size_t)nblocks);
+    if (!blk)
     {
-      for (int jg = (int)MyGrids[0].GSstart[_y_]; jg < (int)(MyGrids[0].GSstart[_y_] + MyGrids[0].GSlocal[_y_]); ++jg)
+      culling_enabled = 0; /* fallback */
+    }
+    else
+    {
+      for (long i = 0; i < nblocks; ++i)
+        bounds_init(&blk[i]);
+      /* Build local index edges per axis (inclusive ranges [edge[k], edge[k+1]) in local coords) */
+      edge_x = (int *)malloc(sizeof(int) * (size_t)(nbx + 1));
+      edge_y = (int *)malloc(sizeof(int) * (size_t)(nby + 1));
+      edge_z = (int *)malloc(sizeof(int) * (size_t)(nbz + 1));
+      if (!edge_x || !edge_y || !edge_z)
       {
-        for (int kg = (int)MyGrids[0].GSstart[_z_]; kg < (int)(MyGrids[0].GSstart[_z_] + MyGrids[0].GSlocal[_z_]); ++kg)
+        culling_enabled = 0;
+      }
+      else
+      {
+        for (int b = 0; b <= nbx; ++b)
+          edge_x[b] = (int)((long)b * (long)nx_local / (long)nbx);
+        for (int b = 0; b <= nby; ++b)
+          edge_y[b] = (int)((long)b * (long)ny_local / (long)nby);
+        for (int b = 0; b <= nbz; ++b)
+          edge_z[b] = (int)((long)b * (long)nz_local / (long)nbz);
+
+        /* Pre-pass: accumulate block AABBs from products */
+        for (int ig = gx_start; ig < gx_start + nx_local; ++ig)
         {
-          pos_data obj;
-          mass_maps_set_point_from_products_global(ig, jg, kg, Fseg, &obj);
-          if (obj.M == 0)
+          int li = ig - gx_start;
+          int bx = (nbx > 1) ? (li * nbx) / nx_local : 0;
+          if (bx >= nbx)
+            bx = nbx - 1;
+          for (int jg = gy_start; jg < gy_start + ny_local; ++jg)
           {
-            continue; /* safety */
+            int lj = jg - gy_start;
+            int by = (nby > 1) ? (lj * nby) / ny_local : 0;
+            if (by >= nby)
+              by = nby - 1;
+            for (int kg = gz_start; kg < gz_start + nz_local; ++kg)
+            {
+              int lk = kg - gz_start;
+              int bz = (nbz > 1) ? (lk * nbz) / nz_local : 0;
+              if (bz >= nbz)
+                bz = nbz - 1;
+              long bidx = ((long)bz * (long)nby + (long)by) * (long)nbx + (long)bx;
+              pos_data obj;
+              mass_maps_set_point_from_products_global(ig, jg, kg, Fseg, &obj);
+              if (obj.M == 0)
+                continue;
+              double pos_prev[3], pos_curr[3];
+              mass_maps_compute_prev_curr_positions(&obj, pos_prev, pos_curr, lpt_order);
+              bounds_accumulate(&blk[bidx], pos_prev, pos_curr);
+            }
           }
-
-          double pos_prev[3], pos_curr[3];
-          mass_maps_compute_prev_curr_positions(&obj, pos_prev, pos_curr, lpt_order);
-
-          /* Use robust crossing helper to get alpha and entry (avoid double shift):
-            pass q (phys) and displacements (phys) from unshifted positions; helper adds replication shift. */
-          double entry_pos[3];
-          double q_phys[3] = {(obj.q[0]) * params.InterPartDist,
-                              (obj.q[1]) * params.InterPartDist,
-                              (obj.q[2]) * params.InterPartDist};
-          double disp_prev_phys[3] = {pos_prev[0] - q_phys[0],
-                                      pos_prev[1] - q_phys[1],
-                                      pos_prev[2] - q_phys[2]};
-          double disp_curr_phys[3] = {pos_curr[0] - q_phys[0],
-                                      pos_curr[1] - q_phys[1],
-                                      pos_curr[2] - q_phys[2]};
-          if (!mass_maps_particle_sign_change(rep_id, q_phys, disp_prev_phys, disp_curr_phys, z_prev, z_curr, NULL, entry_pos))
-            continue;
-
-          ++rep_crossings;
-          /* Accumulate into segment map using the entry position returned by the helper */
-          int s_map = segment_index - 1;
-          if (s_map >= 0 && s_map < NMassSheets)
-            mass_maps_accumulate_entry_pos(s_map, entry_pos, 1.0);
+        }
+        /* Optional padding */
+        if (cull_pad > 0.0)
+        {
+          for (long i = 0; i < nblocks; ++i)
+            if (blk[i].initialized)
+              bounds_pad(&blk[i], cull_pad);
         }
       }
     }
-
-    total_crossings_all_reps += rep_crossings;
-    if (rep_crossings_local)
-      rep_crossings_local[ir] = rep_crossings;
-    if (!ThisTask && internal.verbose_level >= VDIAG)
-      printf("[%s] MASS_MAPS(products): segment %d rep %d local entries %llu\n", fdate(), segment_index, rep_id, rep_crossings);
   }
+
+  /* Precompute box shifts for all replication candidates once
+   * Rationale: avoids recomputing (ii,jj,kk)*Box for every particle.
+   */
+  double Bx = MyGrids[0].GSglobal[_x_] * params.InterPartDist;
+  double By = MyGrids[0].GSglobal[_y_] * params.InterPartDist;
+  double Bz = MyGrids[0].GSglobal[_z_] * params.InterPartDist;
+  double *RepShift = NULL;
+  if (MassMapSegmentReplicationCount > 0)
+  {
+    RepShift = (double *)malloc(sizeof(double) * 3 * (size_t)MassMapSegmentReplicationCount);
+    if (RepShift)
+    {
+      for (int ir = 0; ir < MassMapSegmentReplicationCount; ++ir)
+      {
+        int rep_id = MassMapSegmentReplications[ir];
+        int ii = plc.repls[rep_id].i;
+        int jj = plc.repls[rep_id].j;
+        int kk = plc.repls[rep_id].k;
+        RepShift[3 * ir + 0] = ii * Bx;
+        RepShift[3 * ir + 1] = jj * By;
+        RepShift[3 * ir + 2] = kk * Bz;
+      }
+    }
+  }
+
+  /* Culling-enabled path: iterate blocks first to reuse particle positions across replications
+   * Hotspot: the inner loops over particles and replications are dominant.
+   * Current approach uses a per-block cache of positions to reduce recomputation
+   * and OpenMP over blocks with atomic map updates for correctness.
+   * TODO(perf): replace atomics with per-thread buffers and a final merge.
+   */
+  if (culling_enabled && blk && RepShift)
+  {
+    int s_map = segment_index - 1;
+    /* Parallelize over blocks; each iteration handles one block fully */
+#ifdef _OPENMP
+#pragma omp parallel for collapse(3) schedule(dynamic)
+#endif
+    for (int bz = 0; bz < nbz; ++bz)
+      for (int by = 0; by < nby; ++by)
+        for (int bx_i = 0; bx_i < nbx; ++bx_i)
+        {
+          int kg0_local = edge_z[bz];
+          int kg1_local = edge_z[bz + 1] - 1;
+          if (kg1_local < kg0_local)
+            continue;
+          int kg0 = gz_start + kg0_local;
+          int kg1 = gz_start + kg1_local;
+          int jg0_local = edge_y[by];
+          int jg1_local = edge_y[by + 1] - 1;
+          if (jg1_local < jg0_local)
+            continue;
+          int jg0 = gy_start + jg0_local;
+          int jg1 = gy_start + jg1_local;
+          int ig0_local = edge_x[bx_i];
+          int ig1_local = edge_x[bx_i + 1] - 1;
+          if (ig1_local < ig0_local)
+            continue;
+          int ig0 = gx_start + ig0_local;
+          int ig1 = gx_start + ig1_local;
+          long bidx = ((long)bz * (long)nby + (long)by) * (long)nbx + (long)bx_i;
+          if (!blk[bidx].initialized)
+            continue; /* empty block */
+
+          /* Build replication pass list for this block */
+          int *rep_pass = (int *)alloca(sizeof(int) * (size_t)MassMapSegmentReplicationCount);
+          int pass_n = 0;
+          for (int ir = 0; ir < MassMapSegmentReplicationCount; ++ir)
+          {
+            const double *shift = &RepShift[3 * ir];
+            double min_s[3] = {blk[bidx].min_all[0] + shift[0], blk[bidx].min_all[1] + shift[1], blk[bidx].min_all[2] + shift[2]};
+            double max_s[3] = {blk[bidx].max_all[0] + shift[0], blk[bidx].max_all[1] + shift[1], blk[bidx].max_all[2] + shift[2]};
+            double dmin, dmax;
+            aabb_distance_bounds_to_point(min_s, max_s, c_phys, &dmin, &dmax);
+            if (!(dmin > seg_chi_max || dmax < seg_chi_min))
+              rep_pass[pass_n++] = ir;
+          }
+          if (pass_n == 0)
+            continue; /* no replication needs this block */
+
+          /* Prepare buffers for this block's particles (thread-local) */
+          long nx = (long)(ig1 - ig0 + 1);
+          long ny = (long)(jg1 - jg0 + 1);
+          long nz = (long)(kg1 - kg0 + 1);
+          long nblock = nx * ny * nz;
+          if (nblock <= 0)
+            continue;
+          double *PosPrevBuf = (double *)malloc(sizeof(double) * 3 * (size_t)nblock);
+          double *PosCurrBuf = (double *)malloc(sizeof(double) * 3 * (size_t)nblock);
+          int use_cache = (PosPrevBuf && PosCurrBuf);
+          if (use_cache)
+          {
+            /* Fill cached positions once */
+            long idx = 0;
+            for (int ig = ig0; ig <= ig1; ++ig)
+            {
+              for (int jg = jg0; jg <= jg1; ++jg)
+              {
+                for (int kg = kg0; kg <= kg1; ++kg, ++idx)
+                {
+                  pos_data obj;
+                  mass_maps_set_point_from_products_global(ig, jg, kg, Fseg, &obj);
+                  if (obj.M == 0)
+                  {
+                    /* Mark as zero-length by duplicating prev/curr */
+                    PosPrevBuf[3 * idx + 0] = PosPrevBuf[3 * idx + 1] = PosPrevBuf[3 * idx + 2] = 0.0;
+                    PosCurrBuf[3 * idx + 0] = PosCurrBuf[3 * idx + 1] = PosCurrBuf[3 * idx + 2] = 0.0;
+                    continue;
+                  }
+                  double pprev[3], pcurr[3];
+                  mass_maps_compute_prev_curr_positions(&obj, pprev, pcurr, lpt_order);
+                  PosPrevBuf[3 * idx + 0] = pprev[0];
+                  PosPrevBuf[3 * idx + 1] = pprev[1];
+                  PosPrevBuf[3 * idx + 2] = pprev[2];
+                  PosCurrBuf[3 * idx + 0] = pcurr[0];
+                  PosCurrBuf[3 * idx + 1] = pcurr[1];
+                  PosCurrBuf[3 * idx + 2] = pcurr[2];
+                }
+              }
+            }
+
+            /* Use cached positions for each passing replication */
+            for (int ip = 0; ip < pass_n; ++ip)
+            {
+              int ir = rep_pass[ip];
+              const double *shift = &RepShift[3 * ir];
+              unsigned long long local_cross = 0ULL;
+              long idx2 = 0;
+              for (int ig = ig0; ig <= ig1; ++ig)
+              {
+                for (int jg = jg0; jg <= jg1; ++jg)
+                {
+                  for (int kg = kg0; kg <= kg1; ++kg, ++idx2)
+                  {
+                    double Pprev[3] = {PosPrevBuf[3 * idx2 + 0] + shift[0],
+                                       PosPrevBuf[3 * idx2 + 1] + shift[1],
+                                       PosPrevBuf[3 * idx2 + 2] + shift[2]};
+                    double Pcurr[3] = {PosCurrBuf[3 * idx2 + 0] + shift[0],
+                                       PosCurrBuf[3 * idx2 + 1] + shift[1],
+                                       PosCurrBuf[3 * idx2 + 2] + shift[2]};
+                    /* Skip if empty marked */
+                    if (Pprev[0] == 0.0 && Pprev[1] == 0.0 && Pprev[2] == 0.0 &&
+                        Pcurr[0] == 0.0 && Pcurr[1] == 0.0 && Pcurr[2] == 0.0)
+                      continue;
+                    double entry_pos[3];
+                    if (!mass_maps_crossing_from_shifted_positions(Pprev, Pcurr, c_phys, chi_prev_seg, chi_curr_seg, NULL, entry_pos))
+                      continue;
+                    local_cross++;
+                    if (s_map >= 0 && s_map < NMassSheets && MassMapNSIDE_current > 0)
+                    {
+                      long ipix;
+                      if (mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, 0, &ipix))
+                      {
+                        double *map = mass_maps_segment_ptr(s_map);
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                        map[ipix] += 1.0;
+                      }
+                    }
+                  }
+                }
+              }
+          /* Thread-safe global counters */
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+              total_crossings_all_reps += local_cross;
+              if (rep_crossings_local)
+              {
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                rep_crossings_local[ir] += local_cross;
+              }
+            }
+          }
+          else
+          {
+            /* No cache available: compute per particle per passing replication */
+            for (int ip = 0; ip < pass_n; ++ip)
+            {
+              int ir = rep_pass[ip];
+              const double *shift = &RepShift[3 * ir];
+              unsigned long long local_cross = 0ULL;
+              for (int ig = ig0; ig <= ig1; ++ig)
+              {
+                for (int jg = jg0; jg <= jg1; ++jg)
+                {
+                  for (int kg = kg0; kg <= kg1; ++kg)
+                  {
+                    pos_data obj;
+                    mass_maps_set_point_from_products_global(ig, jg, kg, Fseg, &obj);
+                    if (obj.M == 0)
+                      continue;
+                    double pos_prev[3], pos_curr[3];
+                    mass_maps_compute_prev_curr_positions(&obj, pos_prev, pos_curr, lpt_order);
+                    double Pprev[3] = {pos_prev[0] + shift[0], pos_prev[1] + shift[1], pos_prev[2] + shift[2]};
+                    double Pcurr[3] = {pos_curr[0] + shift[0], pos_curr[1] + shift[1], pos_curr[2] + shift[2]};
+                    double entry_pos[3];
+                    if (!mass_maps_crossing_from_shifted_positions(Pprev, Pcurr, c_phys, chi_prev_seg, chi_curr_seg, NULL, entry_pos))
+                      continue;
+                    local_cross++;
+                    if (s_map >= 0 && s_map < NMassSheets && MassMapNSIDE_current > 0)
+                    {
+                      long ipix;
+                      if (mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, 0, &ipix))
+                      {
+                        double *map = mass_maps_segment_ptr(s_map);
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                        map[ipix] += 1.0;
+                      }
+                    }
+                  }
+                }
+              }
+          /* Thread-safe global counters */
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+              total_crossings_all_reps += local_cross;
+              if (rep_crossings_local)
+              {
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                rep_crossings_local[ir] += local_cross;
+              }
+            }
+          }
+          if (PosPrevBuf)
+            free(PosPrevBuf);
+          if (PosCurrBuf)
+            free(PosCurrBuf);
+        }
+  }
+  else
+  {
+    /* Previous per-rep traversal (fallback without culling or on allocation failure) */
+    for (int ir = 0; ir < MassMapSegmentReplicationCount; ++ir)
+    {
+      int rep_id = MassMapSegmentReplications[ir];
+      unsigned long long rep_crossings = 0ULL;
+      double shift[3] = {RepShift ? RepShift[3 * ir + 0] : 0.0,
+                         RepShift ? RepShift[3 * ir + 1] : 0.0,
+                         RepShift ? RepShift[3 * ir + 2] : 0.0};
+#ifdef _OPENMP
+#pragma omp parallel for collapse(3) schedule(static) reduction(+ : rep_crossings)
+#endif
+      for (int ig = gx_start; ig < gx_start + nx_local; ++ig)
+      {
+        for (int jg = gy_start; jg < gy_start + ny_local; ++jg)
+        {
+          for (int kg = gz_start; kg < gz_start + nz_local; ++kg)
+          {
+            pos_data obj;
+            mass_maps_set_point_from_products_global(ig, jg, kg, Fseg, &obj);
+            if (obj.M == 0)
+              continue; /* safety */
+            double pos_prev[3], pos_curr[3];
+            mass_maps_compute_prev_curr_positions(&obj, pos_prev, pos_curr, lpt_order);
+            double Pprev[3] = {pos_prev[0] + shift[0], pos_prev[1] + shift[1], pos_prev[2] + shift[2]};
+            double Pcurr[3] = {pos_curr[0] + shift[0], pos_curr[1] + shift[1], pos_curr[2] + shift[2]};
+            double entry_pos[3];
+            if (!mass_maps_crossing_from_shifted_positions(Pprev, Pcurr, c_phys, chi_prev_seg, chi_curr_seg, NULL, entry_pos))
+              continue;
+            ++rep_crossings;
+            int s_map = segment_index - 1;
+            if (s_map >= 0 && s_map < NMassSheets && MassMapNSIDE_current > 0)
+            {
+              long ipix;
+              if (mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, 0, &ipix))
+              {
+                double *map = mass_maps_segment_ptr(s_map);
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                map[ipix] += 1.0;
+              }
+            }
+          }
+        }
+      }
+      total_crossings_all_reps += rep_crossings;
+      if (rep_crossings_local)
+        rep_crossings_local[ir] = rep_crossings;
+      if (!ThisTask && internal.verbose_level >= VDIAG)
+      {
+        printf("[%s] MASS_MAPS(products): segment %d rep %d local entries %llu\n", fdate(), segment_index, rep_id, rep_crossings);
+      }
+    }
+  }
+
+  if (RepShift)
+    free(RepShift);
+
+  /* Free culling structures */
+  if (blk)
+    free(blk);
+  if (edge_x)
+    free(edge_x);
+  if (edge_y)
+    free(edge_y);
+  if (edge_z)
+    free(edge_z);
 
   /* Reduce per-rep and total counts across tasks */
   if (MassMapSegmentReplicationCount > 0)
