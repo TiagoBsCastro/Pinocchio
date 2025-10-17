@@ -6,26 +6,29 @@
  *   fragmentation outputs and accumulate counts on per-segment HEALPix maps.
  *
  * Data flow (per segment):
- *   - Build candidate replications by radial overlap with segment chi-span.
- *   - Optionally cull Lagrangian sub-volumes (blocks) using Eulerian AABBs
- *     against the PLC shell; precompute per-block prev/curr AABBs.
- *   - For each relevant replication, test the user crossing condition
- *     H_prev = chi_prev − r_prev, H_curr = chi_curr − r_curr and linearly
- *     interpolate the entry position on success.
- *   - Pixelize the entry on the sky using a PLC-aligned basis and increment
- *     the segment’s HEALPix map.
- *   - MPI-reduce per-rep counters and the map to rank 0 and write FITS.
+ *   - Build candidate replications by radial overlap with the segment chi-span.
+ *   - Partition the local tile into Lagrangian blocks; for each block+replication,
+ *     build a block AABB in physical units expanded by a fixed buffer
+ *     (absolute and/or fraction of block half-diagonal) plus MASS_MAPS_CULL_PAD_PHYS.
+ *   - Apply conservative culls before touching particles:
+ *       • radial shell test via tight AABB distance bounds to the PLC center
+ *       • angular aperture test via a cosine upper bound over the AABB
+ *   - For passing pairs, traverse particles; test the user crossing condition
+ *     H_prev = chi_prev − r_prev, H_curr = chi_curr − r_curr; on success, linearly
+ *     interpolate the entry position, gate by aperture, pixelize, and accumulate.
+ *   - MPI-reduce per-rep counters and the map to rank 0; write one FITS per segment.
  *
  * Performance notes:
- *   - Culling reduces work by skipping blocks whose AABB (shifted by a given
- *     replication) cannot intersect the segment’s radial shell.
- *   - OpenMP parallelizes the per-block traversal as well as the fallback
- *     triple loops; map updates use atomic increments for correctness.
- *   - Potential hotspots and future work are annotated inline with TODOs.
+ *   - Lagrangian block culling prunes most work with cheap block-level radial
+ *     and angular tests; replication shifts are applied only to passing blocks.
+ *   - OpenMP parallelizes over blocks; optional per-thread HEALPix accumulators
+ *     reduce atomic contention on the global map.
  *
  * Environment knobs:
  *   MASS_MAPS_BLOCKS[_X|_Y|_Z]: number of Lagrangian blocks per axis (>=1)
- *   MASS_MAPS_CULL_PAD_PHYS:    padding (phys units) added to block AABBs
+ *   MASS_MAPS_CULL_PAD_PHYS:    padding (phys units) added to Lagrangian AABBs (phys units)
+ *   MASS_MAPS_DISP_BUFFER_FIXED_PHYS: if >=0, use this fixed buffer (phys units)
+ *   MASS_MAPS_DISP_BUFFER_FRAC:       if >=0, per-block buffer = FRAC * (half-diagonal of block) in phys units
  *
  * Accuracy contract:
  *   All refactors preserve the user-specified crossing criterion and output
@@ -72,7 +75,7 @@
 #define MASS_MAPS_BLOCKS 8
 #endif
 #ifndef MASS_MAPS_CULL_PAD_PHYS
-#define MASS_MAPS_CULL_PAD_PHYS 0.1
+#define MASS_MAPS_CULL_PAD_PHYS 0.01
 #endif
 
 /* Forward decls for helpers provided elsewhere */
@@ -101,9 +104,6 @@ static double MassMapPLC_e2[3] = {0.0, 1.0, 0.0};
 static double MassMapPLC_e3[3] = {0.0, 0.0, 1.0};
 static int MassMapPLC_BasisReady = 0;
 
-/* Forward declaration: PLC basis builder (defined later in this file) */
-static inline void mass_maps_build_plc_basis(double e1[3], double e2[3], double e3[3]);
-
 static inline void mass_maps_cache_plc_basis_and_center(void)
 {
   if (MassMapPLC_BasisReady)
@@ -111,8 +111,40 @@ static inline void mass_maps_cache_plc_basis_and_center(void)
   MassMapPLC_CenterPhys[0] = plc.center[0] * params.InterPartDist;
   MassMapPLC_CenterPhys[1] = plc.center[1] * params.InterPartDist;
   MassMapPLC_CenterPhys[2] = plc.center[2] * params.InterPartDist;
-  mass_maps_build_plc_basis(MassMapPLC_e1, MassMapPLC_e2, MassMapPLC_e3);
+  /* Use PLC basis computed at initialization (orthonormal and unit) */
+  MassMapPLC_e1[0] = plc.xvers[0];
+  MassMapPLC_e1[1] = plc.xvers[1];
+  MassMapPLC_e1[2] = plc.xvers[2];
+  MassMapPLC_e2[0] = plc.yvers[0];
+  MassMapPLC_e2[1] = plc.yvers[1];
+  MassMapPLC_e2[2] = plc.yvers[2];
+  MassMapPLC_e3[0] = plc.zvers[0];
+  MassMapPLC_e3[1] = plc.zvers[1];
+  MassMapPLC_e3[2] = plc.zvers[2];
   MassMapPLC_BasisReady = 1;
+}
+
+/* Return 1 if the absolute position lies within the PLC angular aperture */
+static inline int mass_maps_entry_inside_aperture(const double pos[3])
+{
+  mass_maps_cache_plc_basis_and_center();
+  double vx = pos[0] - MassMapPLC_CenterPhys[0];
+  double vy = pos[1] - MassMapPLC_CenterPhys[1];
+  double vz = pos[2] - MassMapPLC_CenterPhys[2];
+  double vnorm = sqrt(vx * vx + vy * vy + vz * vz);
+  if (vnorm == 0.0)
+    return 0;
+  double invv = 1.0 / vnorm;
+  double vhat_z = (vx * MassMapPLC_e3[0] + vy * MassMapPLC_e3[1] + vz * MassMapPLC_e3[2]) * invv;
+  if (vhat_z > 1.0)
+    vhat_z = 1.0;
+  else if (vhat_z < -1.0)
+    vhat_z = -1.0;
+  double angle = acos(vhat_z) * (180.0 / acos(-1.0));
+  double A = params.PLCAperture;
+  if (A > 90.0)
+    A = 90.0;
+  return angle <= A;
 }
 /*
  * mass_maps_init_sheets
@@ -141,21 +173,20 @@ int mass_maps_init_sheets(void)
 
   /* Ensure coverage matches PLC redshift range: first output == StartingzForPLC, last output == LastzForPLC */
   {
-    const double eps_match = 1e-6; /* strict: outputs are usually exact; relax if needed */
     double z_first = outputs.z[0];
     double z_last = outputs.z[outputs.n - 1];
-    if (fabs(z_first - params.StartingzForPLC) > eps_match)
+    if (fabs(z_first - params.StartingzForPLC) > MASS_MAPS_Z_EPS)
     {
       if (!ThisTask)
         fprintf(stderr, "MASS_MAPS ERROR: First output redshift %g does not match StartingzForPLC=%g (|Δ|=%g > %g).\n",
-                z_first, params.StartingzForPLC, fabs(z_first - params.StartingzForPLC), eps_match);
+                z_first, params.StartingzForPLC, fabs(z_first - params.StartingzForPLC), MASS_MAPS_Z_EPS);
       return 1;
     }
-    if (fabs(z_last - params.LastzForPLC) > eps_match)
+    if (fabs(z_last - params.LastzForPLC) > MASS_MAPS_Z_EPS)
     {
       if (!ThisTask)
         fprintf(stderr, "MASS_MAPS ERROR: Last output redshift %g does not match LastzForPLC=%g (|Δ|=%g > %g).\n",
-                z_last, params.LastzForPLC, fabs(z_last - params.LastzForPLC), eps_match);
+                z_last, params.LastzForPLC, fabs(z_last - params.LastzForPLC), MASS_MAPS_Z_EPS);
       return 1;
     }
   }
@@ -352,56 +383,6 @@ int mass_maps_init_healpix_maps(int nside)
 /* PLC-oriented basis and pixelization helpers                */
 /* ---------------------------------------------------------- */
 
-/* Build an orthonormal basis (e1,e2,e3), with e3 = PLC axis (unit). */
-static inline void mass_maps_build_plc_basis(double e1[3], double e2[3], double e3[3])
-{
-  /* e3 = normalized PLC axis */
-  double a[3] = {plc.zvers[0], plc.zvers[1], plc.zvers[2]};
-  double anorm = sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
-  if (anorm == 0.0)
-  {
-    e3[0] = 0;
-    e3[1] = 0;
-    e3[2] = 1;
-  }
-  else
-  {
-    e3[0] = a[0] / anorm;
-    e3[1] = a[1] / anorm;
-    e3[2] = a[2] / anorm;
-  }
-  /* choose a temporary vector not parallel to e3 */
-  double up[3] = {0.0, 0.0, 1.0};
-  double dot_up = e3[0] * up[0] + e3[1] * up[1] + e3[2] * up[2];
-  if (fabs(dot_up) > 0.9)
-  {
-    up[0] = 0.0;
-    up[1] = 1.0;
-    up[2] = 0.0;
-  }
-  /* e1 = normalize(up x e3) */
-  double cx1 = up[1] * e3[2] - up[2] * e3[1];
-  double cy1 = up[2] * e3[0] - up[0] * e3[2];
-  double cz1 = up[0] * e3[1] - up[1] * e3[0];
-  double n1 = sqrt(cx1 * cx1 + cy1 * cy1 + cz1 * cz1);
-  if (n1 == 0.0)
-  {
-    e1[0] = 1.0;
-    e1[1] = 0.0;
-    e1[2] = 0.0;
-  }
-  else
-  {
-    e1[0] = cx1 / n1;
-    e1[1] = cy1 / n1;
-    e1[2] = cz1 / n1;
-  }
-  /* e2 = e3 x e1 */
-  e2[0] = e3[1] * e1[2] - e3[2] * e1[1];
-  e2[1] = e3[2] * e1[0] - e3[0] * e1[2];
-  e2[2] = e3[0] * e1[1] - e3[1] * e1[0];
-}
-
 /* Compute HEALPix pixel for segment s at entry between Pprev/Pcurr using alpha in [0,1].
    Orientation is defined by the PLC axis used for groups. Returns 1 on success, 0 on failure. */
 /* Debug helpers: compute simple stats and axis pixel id */
@@ -486,47 +467,8 @@ static inline int mass_maps_crossing_from_shifted_positions(const double Pprev[3
 }
 
 /* ---------------------------------------------------------- */
-/* Lagrangian sub-volume culling helpers (AABB vs PLC shell)  */
+/* Sub-volume culling helpers (AABB vs PLC shell)             */
 /* ---------------------------------------------------------- */
-
-typedef struct
-{
-  double min_all[3];
-  double max_all[3];
-  int initialized;
-} BlockBounds;
-
-static inline void bounds_init(BlockBounds *b)
-{
-  b->min_all[0] = b->min_all[1] = b->min_all[2] = 1e300;
-  b->max_all[0] = b->max_all[1] = b->max_all[2] = -1e300;
-  b->initialized = 0;
-}
-
-static inline void bounds_accumulate(BlockBounds *b, const double p_prev[3], const double p_curr[3])
-{
-  for (int a = 0; a < 3; ++a)
-  {
-    double mn = p_prev[a] < p_curr[a] ? p_prev[a] : p_curr[a];
-    double mx = p_prev[a] > p_curr[a] ? p_prev[a] : p_curr[a];
-    if (mn < b->min_all[a])
-      b->min_all[a] = mn;
-    if (mx > b->max_all[a])
-      b->max_all[a] = mx;
-  }
-  b->initialized = 1;
-}
-
-static inline void bounds_pad(BlockBounds *b, double pad)
-{
-  if (pad <= 0.0)
-    return;
-  for (int a = 0; a < 3; ++a)
-  {
-    b->min_all[a] -= pad;
-    b->max_all[a] += pad;
-  }
-}
 
 /* Compute tight lower/upper bounds for distance from point c to an AABB [min,max] */
 static inline void aabb_distance_bounds_to_point(const double minv[3], const double maxv[3], const double c[3], double *dmin_out, double *dmax_out)
@@ -1318,6 +1260,12 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
   int blocks_y = getenv_int_default("MASS_MAPS_BLOCKS_Y", blocks_all);
   int blocks_z = getenv_int_default("MASS_MAPS_BLOCKS_Z", blocks_all);
   double cull_pad = getenv_double_default("MASS_MAPS_CULL_PAD_PHYS", MASS_MAPS_CULL_PAD_PHYS);
+  int thread_accum = getenv_int_default("MASS_MAPS_THREAD_ACCUM", 0); /* per-thread HEALPix accumulators */
+  /* Precompute cos(aperture) for conservative angular culling */
+  double A = params.PLCAperture;
+  if (A > 90.0)
+    A = 90.0;
+  double cosA = cos(A * (acos(-1.0) / 180.0));
   int nx_local = (int)MyGrids[0].GSlocal[_x_];
   int ny_local = (int)MyGrids[0].GSlocal[_y_];
   int nz_local = (int)MyGrids[0].GSlocal[_z_];
@@ -1334,16 +1282,31 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
   int culling_enabled = (blocks_x > 0 && blocks_y > 0 && blocks_z > 0);
   if (!ThisTask && internal.verbose_level >= VDIAG)
   {
-    printf("[%s] MASS_MAPS culling: blocks=(%d,%d,%d) pad=%.3g enabled=%d\n",
+    printf("[%s] MASS_MAPS culling: blocks=(%d,%d,%d) pad=%.3g enabled=%d (Lagrangian-only)\n",
            fdate(), blocks_x, blocks_y, blocks_z, cull_pad, culling_enabled);
   }
 
-  /* Precompute per-block Eulerian AABBs for prev/curr positions (union), if enabled)
-   * Hotspot note: This pre-pass is O(N_local) and can be parallelized if it
-   * becomes dominant; currently left serial to avoid extra memory traffic.
-   * TODO(perf): parallelize with OpenMP and per-thread local bounds, then merge.
-   */
-  BlockBounds *blk = NULL;
+  /* Fixed buffer options: absolute phys value and/or fraction of block size */
+  double disp_fixed_phys = getenv_double_default("MASS_MAPS_DISP_BUFFER_FIXED_PHYS", -1.0);
+  double disp_frac = getenv_double_default("MASS_MAPS_DISP_BUFFER_FRAC", -1.0);
+  /* Last-segment displacement vs fixed-buffer diagnostics */
+  double warn_frac = getenv_double_default("MASS_MAPS_DISP_BUFFER_WARN_FRAC", 0.05); /* warn if >= this fraction exceed buffer */
+  int last_segment = (segment_index == NMassSheets);
+  int collect_disp_stats = (last_segment && disp_fixed_phys > 0.0);
+  unsigned long long disp_total_local = 0ULL;  /* number of particles evaluated */
+  unsigned long long disp_exceed_local = 0ULL; /* number with |Pcurr-Pprev| > fixed buffer */
+  double disp_max_local = 0.0;                 /* maximum |Pcurr-Pprev| observed */
+  if (!ThisTask && internal.verbose_level >= VDIAG)
+  {
+    if (disp_fixed_phys >= 0.0)
+      printf("[%s] MASS_MAPS culling: using fixed buffer phys=%.6g\n", fdate(), disp_fixed_phys);
+    if (disp_frac >= 0.0)
+      printf("[%s] MASS_MAPS culling: using fractional buffer frac=%.6g of block half-diagonal\n", fdate(), disp_frac);
+    if (collect_disp_stats)
+      printf("[%s] MASS_MAPS buffer-diag: last segment will collect displacement stats vs fixed buffer phys=%.6g (warn frac=%.3g)\n",
+             fdate(), disp_fixed_phys, warn_frac);
+  }
+  /* Build block edge indices in local coordinates (inclusive ranges per block) */
   int *edge_x = NULL, *edge_y = NULL, *edge_z = NULL;
   int nbx = 0, nby = 0, nbz = 0;
   if (culling_enabled)
@@ -1351,71 +1314,21 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
     nbx = blocks_x;
     nby = blocks_y;
     nbz = blocks_z;
-    long nblocks = (long)nbx * (long)nby * (long)nbz;
-    blk = (BlockBounds *)malloc(sizeof(BlockBounds) * (size_t)nblocks);
-    if (!blk)
+    edge_x = (int *)malloc(sizeof(int) * (size_t)(nbx + 1));
+    edge_y = (int *)malloc(sizeof(int) * (size_t)(nby + 1));
+    edge_z = (int *)malloc(sizeof(int) * (size_t)(nbz + 1));
+    if (!edge_x || !edge_y || !edge_z)
     {
-      culling_enabled = 0; /* fallback */
+      culling_enabled = 0;
     }
     else
     {
-      for (long i = 0; i < nblocks; ++i)
-        bounds_init(&blk[i]);
-      /* Build local index edges per axis (inclusive ranges [edge[k], edge[k+1]) in local coords) */
-      edge_x = (int *)malloc(sizeof(int) * (size_t)(nbx + 1));
-      edge_y = (int *)malloc(sizeof(int) * (size_t)(nby + 1));
-      edge_z = (int *)malloc(sizeof(int) * (size_t)(nbz + 1));
-      if (!edge_x || !edge_y || !edge_z)
-      {
-        culling_enabled = 0;
-      }
-      else
-      {
-        for (int b = 0; b <= nbx; ++b)
-          edge_x[b] = (int)((long)b * (long)nx_local / (long)nbx);
-        for (int b = 0; b <= nby; ++b)
-          edge_y[b] = (int)((long)b * (long)ny_local / (long)nby);
-        for (int b = 0; b <= nbz; ++b)
-          edge_z[b] = (int)((long)b * (long)nz_local / (long)nbz);
-
-        /* Pre-pass: accumulate block AABBs from products */
-        for (int ig = gx_start; ig < gx_start + nx_local; ++ig)
-        {
-          int li = ig - gx_start;
-          int bx = (nbx > 1) ? (li * nbx) / nx_local : 0;
-          if (bx >= nbx)
-            bx = nbx - 1;
-          for (int jg = gy_start; jg < gy_start + ny_local; ++jg)
-          {
-            int lj = jg - gy_start;
-            int by = (nby > 1) ? (lj * nby) / ny_local : 0;
-            if (by >= nby)
-              by = nby - 1;
-            for (int kg = gz_start; kg < gz_start + nz_local; ++kg)
-            {
-              int lk = kg - gz_start;
-              int bz = (nbz > 1) ? (lk * nbz) / nz_local : 0;
-              if (bz >= nbz)
-                bz = nbz - 1;
-              long bidx = ((long)bz * (long)nby + (long)by) * (long)nbx + (long)bx;
-              pos_data obj;
-              mass_maps_set_point_from_products_global(ig, jg, kg, Fseg, &obj);
-              if (obj.M == 0)
-                continue;
-              double pos_prev[3], pos_curr[3];
-              mass_maps_compute_prev_curr_positions(&obj, pos_prev, pos_curr, lpt_order);
-              bounds_accumulate(&blk[bidx], pos_prev, pos_curr);
-            }
-          }
-        }
-        /* Optional padding */
-        if (cull_pad > 0.0)
-        {
-          for (long i = 0; i < nblocks; ++i)
-            if (blk[i].initialized)
-              bounds_pad(&blk[i], cull_pad);
-        }
-      }
+      for (int b = 0; b <= nbx; ++b)
+        edge_x[b] = (int)((long)b * (long)nx_local / (long)nbx);
+      for (int b = 0; b <= nby; ++b)
+        edge_y[b] = (int)((long)b * (long)ny_local / (long)nby);
+      for (int b = 0; b <= nbz; ++b)
+        edge_z[b] = (int)((long)b * (long)nz_local / (long)nbz);
     }
   }
 
@@ -1447,13 +1360,18 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
   /* Culling-enabled path: iterate blocks first to reuse particle positions across replications
    * Hotspot: the inner loops over particles and replications are dominant.
    * Current approach uses a per-block cache of positions to reduce recomputation
-   * and OpenMP over blocks with atomic map updates for correctness.
-   * TODO(perf): replace atomics with per-thread buffers and a final merge.
+   * and OpenMP over blocks. Map updates default to atomics; an optional per-thread
+   * accumulator (MASS_MAPS_THREAD_ACCUM) further reduces contention with a final merge.
    */
-  if (culling_enabled && blk && RepShift)
+  if (culling_enabled && RepShift)
   {
     int s_map = segment_index - 1;
-    /* Parallelize over blocks; each iteration handles one block fully */
+    /* Diagnostics: track block visitation effectiveness */
+    long long blocks_total = (long long)nbx * (long long)nby * (long long)nbz;
+    long long blocks_init_count = 0;    /* blocks with any particles (AABB initialized) */
+    long long blocks_skipped_shell = 0; /* initialized blocks rejected by shell test for all reps */
+    long long blocks_visited = 0;       /* initialized blocks with at least one passing replication */
+                                        /* Parallelize over blocks; each iteration handles one block fully */
 #ifdef _OPENMP
 #pragma omp parallel for collapse(3) schedule(dynamic)
 #endif
@@ -1479,9 +1397,14 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
             continue;
           int ig0 = gx_start + ig0_local;
           int ig1 = gx_start + ig1_local;
-          long bidx = ((long)bz * (long)nby + (long)by) * (long)nbx + (long)bx_i;
-          if (!blk[bidx].initialized)
-            continue; /* empty block */
+          /* Determine whether this block has content to consider */
+          int block_initialized = 1; /* Lagrangian-only: any non-empty index range is considered initialized */
+          if (!block_initialized)
+            continue;
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+          blocks_init_count++;
 
           /* Build replication pass list for this block */
           int *rep_pass = (int *)alloca(sizeof(int) * (size_t)MassMapSegmentReplicationCount);
@@ -1489,15 +1412,72 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
           for (int ir = 0; ir < MassMapSegmentReplicationCount; ++ir)
           {
             const double *shift = &RepShift[3 * ir];
-            double min_s[3] = {blk[bidx].min_all[0] + shift[0], blk[bidx].min_all[1] + shift[1], blk[bidx].min_all[2] + shift[2]};
-            double max_s[3] = {blk[bidx].max_all[0] + shift[0], blk[bidx].max_all[1] + shift[1], blk[bidx].max_all[2] + shift[2]};
+            /* Lagrangian AABB expanded by fixed buffer and pad (phys units) */
+            double scale = params.InterPartDist;
+            double min_s[3] = {(ig0 + SHIFT) * scale, (jg0 + SHIFT) * scale, (kg0 + SHIFT) * scale};
+            double max_s[3] = {(ig1 + SHIFT) * scale, (jg1 + SHIFT) * scale, (kg1 + SHIFT) * scale};
+            /* Compute per-block buffer: fixed phys plus optional fraction of half-diagonal */
+            double buf_phys = 0.0;
+            if (disp_fixed_phys >= 0.0)
+              buf_phys += disp_fixed_phys;
+            if (disp_frac >= 0.0)
+            {
+              double dx = (ig1 - ig0 + 1) * scale * 0.5;
+              double dy = (jg1 - jg0 + 1) * scale * 0.5;
+              double dz = (kg1 - kg0 + 1) * scale * 0.5;
+              double half_diag = sqrt(dx * dx + dy * dy + dz * dz);
+              buf_phys += disp_frac * half_diag;
+            }
+            double pad_total = buf_phys + cull_pad;
+            for (int a = 0; a < 3; ++a)
+            {
+              min_s[a] -= pad_total;
+              max_s[a] += pad_total;
+              min_s[a] += shift[a];
+              max_s[a] += shift[a];
+            }
             double dmin, dmax;
             aabb_distance_bounds_to_point(min_s, max_s, c_phys, &dmin, &dmax);
-            if (!(dmin > seg_chi_max || dmax < seg_chi_min))
-              rep_pass[pass_n++] = ir;
+            if (dmin > seg_chi_max || dmax < seg_chi_min)
+              continue; /* radial shell rejects */
+            /* Conservative angular cull using cosine upper bound:
+               If max_{box} (u·r/|r|) ≤ cosA, the whole AABB is outside aperture.
+               Upper bound <= (max_u_dot) / (min_norm). */
+            double u[3] = {plc.zvers[0], plc.zvers[1], plc.zvers[2]}; /* unit axis */
+            /* Build relative bounds r = x - c */
+            double rmin[3] = {min_s[0] - c_phys[0], min_s[1] - c_phys[1], min_s[2] - c_phys[2]};
+            double rmax[3] = {max_s[0] - c_phys[0], max_s[1] - c_phys[1], max_s[2] - c_phys[2]};
+            /* max_u_dot: choose per-axis extreme based on sign of u */
+            double max_u_dot = 0.0;
+            for (int a = 0; a < 3; ++a)
+            {
+              double ra = (u[a] >= 0.0) ? rmax[a] : rmin[a];
+              max_u_dot += u[a] * ra;
+            }
+            /* min_norm = dmin from center to AABB; if center inside (dmin==0), skip angular culling */
+            int angular_pass = 1;
+            if (dmin > 0.0)
+            {
+              double cos_ub = max_u_dot / dmin;
+              if (cos_ub <= cosA)
+                angular_pass = 0; /* definitely outside aperture */
+            }
+            if (!angular_pass)
+              continue;
+            rep_pass[pass_n++] = ir;
           }
           if (pass_n == 0)
+          {
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+            blocks_skipped_shell++;
             continue; /* no replication needs this block */
+          }
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+          blocks_visited++;
 
           /* Prepare buffers for this block's particles (thread-local) */
           long nx = (long)(ig1 - ig0 + 1);
@@ -1508,11 +1488,18 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
             continue;
           double *PosPrevBuf = (double *)malloc(sizeof(double) * 3 * (size_t)nblock);
           double *PosCurrBuf = (double *)malloc(sizeof(double) * 3 * (size_t)nblock);
+          /* Optional per-thread accumulator for this block to reduce atomics */
+          double *LocalMap = NULL;
+          if (thread_accum && MassMapNSIDE_current > 0)
+            LocalMap = (double *)calloc((size_t)MassMapNPIX, sizeof(double));
           int use_cache = (PosPrevBuf && PosCurrBuf);
           if (use_cache)
           {
             /* Fill cached positions once */
             long idx = 0;
+            /* Per-block diagnostics */
+            unsigned long long blk_total = 0ULL, blk_exceed = 0ULL;
+            double blk_max = 0.0;
             for (int ig = ig0; ig <= ig1; ++ig)
             {
               for (int jg = jg0; jg <= jg1; ++jg)
@@ -1536,7 +1523,37 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                   PosCurrBuf[3 * idx + 0] = pcurr[0];
                   PosCurrBuf[3 * idx + 1] = pcurr[1];
                   PosCurrBuf[3 * idx + 2] = pcurr[2];
+                  if (collect_disp_stats)
+                  {
+                    double dx = pcurr[0] - pprev[0];
+                    double dy = pcurr[1] - pprev[1];
+                    double dz = pcurr[2] - pprev[2];
+                    double d = sqrt(dx * dx + dy * dy + dz * dz);
+                    blk_total++;
+                    if (d > disp_fixed_phys)
+                      blk_exceed++;
+                    if (d > blk_max)
+                      blk_max = d;
+                  }
                 }
+              }
+            }
+            if (collect_disp_stats)
+            {
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+              disp_total_local += blk_total;
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+              disp_exceed_local += blk_exceed;
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+              {
+                if (blk_max > disp_max_local)
+                  disp_max_local = blk_max;
               }
             }
 
@@ -1566,17 +1583,27 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                     double entry_pos[3];
                     if (!mass_maps_crossing_from_shifted_positions(Pprev, Pcurr, c_phys, chi_prev_seg, chi_curr_seg, NULL, entry_pos))
                       continue;
+                    /* Angular aperture: only accumulate entries inside PLC cone */
+                    if (!mass_maps_entry_inside_aperture(entry_pos))
+                      continue;
                     local_cross++;
                     if (s_map >= 0 && s_map < NMassSheets && MassMapNSIDE_current > 0)
                     {
                       long ipix;
                       if (mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, 0, &ipix))
                       {
-                        double *map = mass_maps_segment_ptr(s_map);
+                        if (LocalMap)
+                        {
+                          LocalMap[ipix] += 1.0;
+                        }
+                        else
+                        {
+                          double *map = mass_maps_segment_ptr(s_map);
 #ifdef _OPENMP
 #pragma omp atomic update
 #endif
-                        map[ipix] += 1.0;
+                          map[ipix] += 1.0;
+                        }
                       }
                     }
                   }
@@ -1599,6 +1626,9 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
           else
           {
             /* No cache available: compute per particle per passing replication */
+            /* Per-block diagnostics */
+            unsigned long long blk_total = 0ULL, blk_exceed = 0ULL;
+            double blk_max = 0.0;
             for (int ip = 0; ip < pass_n; ++ip)
             {
               int ir = rep_pass[ip];
@@ -1616,10 +1646,25 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                       continue;
                     double pos_prev[3], pos_curr[3];
                     mass_maps_compute_prev_curr_positions(&obj, pos_prev, pos_curr, lpt_order);
+                    if (collect_disp_stats && ip == 0)
+                    {
+                      double dx = pos_curr[0] - pos_prev[0];
+                      double dy = pos_curr[1] - pos_prev[1];
+                      double dz = pos_curr[2] - pos_prev[2];
+                      double d = sqrt(dx * dx + dy * dy + dz * dz);
+                      blk_total++;
+                      if (d > disp_fixed_phys)
+                        blk_exceed++;
+                      if (d > blk_max)
+                        blk_max = d;
+                    }
                     double Pprev[3] = {pos_prev[0] + shift[0], pos_prev[1] + shift[1], pos_prev[2] + shift[2]};
                     double Pcurr[3] = {pos_curr[0] + shift[0], pos_curr[1] + shift[1], pos_curr[2] + shift[2]};
                     double entry_pos[3];
                     if (!mass_maps_crossing_from_shifted_positions(Pprev, Pcurr, c_phys, chi_prev_seg, chi_curr_seg, NULL, entry_pos))
+                      continue;
+                    /* Angular aperture: only accumulate entries inside PLC cone */
+                    if (!mass_maps_entry_inside_aperture(entry_pos))
                       continue;
                     local_cross++;
                     if (s_map >= 0 && s_map < NMassSheets && MassMapNSIDE_current > 0)
@@ -1627,11 +1672,18 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                       long ipix;
                       if (mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, 0, &ipix))
                       {
-                        double *map = mass_maps_segment_ptr(s_map);
+                        if (LocalMap)
+                        {
+                          LocalMap[ipix] += 1.0;
+                        }
+                        else
+                        {
+                          double *map = mass_maps_segment_ptr(s_map);
 #ifdef _OPENMP
 #pragma omp atomic update
 #endif
-                        map[ipix] += 1.0;
+                          map[ipix] += 1.0;
+                        }
                       }
                     }
                   }
@@ -1650,12 +1702,60 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                 rep_crossings_local[ir] += local_cross;
               }
             }
+            if (collect_disp_stats)
+            {
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+              disp_total_local += blk_total;
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+              disp_exceed_local += blk_exceed;
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+              {
+                if (blk_max > disp_max_local)
+                  disp_max_local = blk_max;
+              }
+            }
+          }
+          /* If we used a local map, merge it into the global segment map once per block */
+          if (LocalMap)
+          {
+            double *map = mass_maps_segment_ptr(s_map);
+            if (map)
+            {
+              for (long i = 0; i < MassMapNPIX; ++i)
+              {
+                double v = LocalMap[i];
+                if (v == 0.0)
+                  continue;
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                map[i] += v;
+              }
+            }
           }
           if (PosPrevBuf)
             free(PosPrevBuf);
           if (PosCurrBuf)
             free(PosCurrBuf);
+          if (LocalMap)
+            free(LocalMap);
         }
+
+    /* Print diagnostics on block visitation */
+    if (!ThisTask && internal.verbose_level >= VDIAG)
+    {
+      double init_pct = (blocks_total > 0) ? (100.0 * (double)blocks_init_count / (double)blocks_total) : 0.0;
+      double visit_pct = (blocks_total > 0) ? (100.0 * (double)blocks_visited / (double)blocks_total) : 0.0;
+      double skip_pct = (blocks_total > 0) ? (100.0 * (double)blocks_skipped_shell / (double)blocks_total) : 0.0;
+      printf("[%s] MASS_MAPS culling: blocks total=%lld init=%lld (%.1f%%) visited=%lld (%.1f%%) skipped_by_shell=%lld (%.1f%%)\n",
+             fdate(), blocks_total, blocks_init_count, init_pct, blocks_visited, visit_pct, blocks_skipped_shell, skip_pct);
+    }
   }
   else
   {
@@ -1667,8 +1767,10 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
       double shift[3] = {RepShift ? RepShift[3 * ir + 0] : 0.0,
                          RepShift ? RepShift[3 * ir + 1] : 0.0,
                          RepShift ? RepShift[3 * ir + 2] : 0.0};
+      unsigned long long local_total = 0ULL, local_exceed = 0ULL;
+      double local_max = 0.0;
 #ifdef _OPENMP
-#pragma omp parallel for collapse(3) schedule(static) reduction(+ : rep_crossings)
+#pragma omp parallel for collapse(3) schedule(static) reduction(+ : rep_crossings, local_total, local_exceed) reduction(max : local_max)
 #endif
       for (int ig = gx_start; ig < gx_start + nx_local; ++ig)
       {
@@ -1682,10 +1784,24 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
               continue; /* safety */
             double pos_prev[3], pos_curr[3];
             mass_maps_compute_prev_curr_positions(&obj, pos_prev, pos_curr, lpt_order);
+            if (collect_disp_stats && ir == 0)
+            {
+              double dx = pos_curr[0] - pos_prev[0];
+              double dy = pos_curr[1] - pos_prev[1];
+              double dz = pos_curr[2] - pos_prev[2];
+              double d = sqrt(dx * dx + dy * dy + dz * dz);
+              local_total++;
+              if (d > disp_fixed_phys)
+                local_exceed++;
+              if (d > local_max)
+                local_max = d;
+            }
             double Pprev[3] = {pos_prev[0] + shift[0], pos_prev[1] + shift[1], pos_prev[2] + shift[2]};
             double Pcurr[3] = {pos_curr[0] + shift[0], pos_curr[1] + shift[1], pos_curr[2] + shift[2]};
             double entry_pos[3];
             if (!mass_maps_crossing_from_shifted_positions(Pprev, Pcurr, c_phys, chi_prev_seg, chi_curr_seg, NULL, entry_pos))
+              continue;
+            if (!mass_maps_entry_inside_aperture(entry_pos))
               continue;
             ++rep_crossings;
             int s_map = segment_index - 1;
@@ -1707,6 +1823,13 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
       total_crossings_all_reps += rep_crossings;
       if (rep_crossings_local)
         rep_crossings_local[ir] = rep_crossings;
+      if (collect_disp_stats && ir == 0)
+      {
+        disp_total_local += local_total;
+        disp_exceed_local += local_exceed;
+        if (local_max > disp_max_local)
+          disp_max_local = local_max;
+      }
       if (!ThisTask && internal.verbose_level >= VDIAG)
       {
         printf("[%s] MASS_MAPS(products): segment %d rep %d local entries %llu\n", fdate(), segment_index, rep_id, rep_crossings);
@@ -1716,10 +1839,7 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
 
   if (RepShift)
     free(RepShift);
-
   /* Free culling structures */
-  if (blk)
-    free(blk);
   if (edge_x)
     free(edge_x);
   if (edge_y)
@@ -1747,6 +1867,27 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
            fdate(), segment_index, MassMapSegmentReplicationCount, total_crossings_all_reps);
     printf("[%s] MASS_MAPS(products): segment %d total global entries across %d reps: %llu\n",
            fdate(), segment_index, MassMapSegmentReplicationCount, total_crossings_all_reps_global);
+  }
+
+  /* Report last-segment displacement vs fixed-buffer stats */
+  if (collect_disp_stats)
+  {
+    unsigned long long disp_total_global = 0ULL, disp_exceed_global = 0ULL;
+    double disp_max_global = 0.0;
+    MPI_Reduce(&disp_total_local, &disp_total_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&disp_exceed_local, &disp_exceed_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&disp_max_local, &disp_max_global, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    if (!ThisTask)
+    {
+      double frac = (disp_total_global > 0ULL) ? ((double)disp_exceed_global / (double)disp_total_global) : 0.0;
+      printf("[%s] MASS_MAPS buffer-diag: last segment displacement vs fixed buffer=%.6g: total=%llu exceed=%llu (%.3f%%) max=%.6g\n",
+             fdate(), disp_fixed_phys, disp_total_global, disp_exceed_global, 100.0 * frac, disp_max_global);
+      if (disp_total_global > 0ULL && frac >= warn_frac)
+      {
+        fprintf(stderr, "[%s] MASS_MAPS WARNING: %.2f%% of particles exceeded MASS_MAPS_DISP_BUFFER_FIXED_PHYS=%.6g. Consider increasing the buffer (warn threshold=%.2f%%).\n",
+                fdate(), 100.0 * frac, disp_fixed_phys, 100.0 * warn_frac);
+      }
+    }
   }
 
   /* Reduce the segment map to root (task 0) */
