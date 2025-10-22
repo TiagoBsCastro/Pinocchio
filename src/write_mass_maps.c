@@ -24,11 +24,13 @@
  *   - OpenMP parallelizes over blocks; optional per-thread HEALPix accumulators
  *     reduce atomic contention on the global map.
  *
- * Environment knobs:
+ * Compile-time knobs (macros):
  *   MASS_MAPS_BLOCKS[_X|_Y|_Z]: number of Lagrangian blocks per axis (>=1)
  *   MASS_MAPS_CULL_PAD_PHYS:    padding (phys units) added to Lagrangian AABBs (phys units)
+ *   MASS_MAPS_THREAD_ACCUM:     if defined, use per-thread HEALPix accumulators
  *   MASS_MAPS_DISP_BUFFER_FIXED_PHYS: if >=0, use this fixed buffer (phys units)
  *   MASS_MAPS_DISP_BUFFER_FRAC:       if >=0, per-block buffer = FRAC * (half-diagonal of block) in phys units
+ *   MASS_MAPS_DISP_BUFFER_WARN_FRAC:  warn if fraction of particles with |Δx|>fixed buffer exceeds this
  *
  * Accuracy contract:
  *   All refactors preserve the user-specified crossing criterion and output
@@ -76,6 +78,26 @@
 #endif
 #ifndef MASS_MAPS_CULL_PAD_PHYS
 #define MASS_MAPS_CULL_PAD_PHYS 0.01
+#endif
+/* Displacement buffer defaults: disabled unless specified */
+#ifndef MASS_MAPS_DISP_BUFFER_FIXED_PHYS
+#define MASS_MAPS_DISP_BUFFER_FIXED_PHYS (-1.0)
+#endif
+#ifndef MASS_MAPS_DISP_BUFFER_FRAC
+#define MASS_MAPS_DISP_BUFFER_FRAC (-1.0)
+#endif
+#ifndef MASS_MAPS_DISP_BUFFER_WARN_FRAC
+#define MASS_MAPS_DISP_BUFFER_WARN_FRAC (0.05)
+#endif
+/* Default per-axis block counts fall back to MASS_MAPS_BLOCKS if not provided */
+#ifndef MASS_MAPS_BLOCKS_X
+#define MASS_MAPS_BLOCKS_X MASS_MAPS_BLOCKS
+#endif
+#ifndef MASS_MAPS_BLOCKS_Y
+#define MASS_MAPS_BLOCKS_Y MASS_MAPS_BLOCKS
+#endif
+#ifndef MASS_MAPS_BLOCKS_Z
+#define MASS_MAPS_BLOCKS_Z MASS_MAPS_BLOCKS
 #endif
 
 /* Forward decls for helpers provided elsewhere */
@@ -142,8 +164,6 @@ static inline int mass_maps_entry_inside_aperture(const double pos[3])
     vhat_z = -1.0;
   double angle = acos(vhat_z) * (180.0 / acos(-1.0));
   double A = params.PLCAperture;
-  if (A > 90.0)
-    A = 90.0;
   return angle <= A;
 }
 /*
@@ -499,23 +519,7 @@ static inline void aabb_distance_bounds_to_point(const double minv[3], const dou
     *dmax_out = sqrt(d2max);
 }
 
-/* Read integer env var with default fallback; returns >=0 (0 means disabled) */
-static inline int getenv_int_default(const char *name, int defval)
-{
-  const char *v = getenv(name);
-  if (!v || !*v)
-    return defval;
-  int val = atoi(v);
-  return val < 0 ? defval : val;
-}
-
-static inline double getenv_double_default(const char *name, double defval)
-{
-  const char *v = getenv(name);
-  if (!v || !*v)
-    return defval;
-  return atof(v);
-}
+/* no env accessors: all mass-maps culling knobs are compile-time macros now */
 
 /* Compute HEALPix pixel directly from an absolute position (phys units) */
 int mass_maps_compute_pixel_from_pos(const double pos[3], int nside, int nest, long *pix_out)
@@ -1254,17 +1258,19 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
   /* Precompute scale factor F for set_point (1+z at current segment) */
   PRODFLOAT Fseg = (PRODFLOAT)(z_segment + 1.0);
 
-  /* Optional: Lagrangian sub-volume culling setup */
-  int blocks_all = getenv_int_default("MASS_MAPS_BLOCKS", MASS_MAPS_BLOCKS);
-  int blocks_x = getenv_int_default("MASS_MAPS_BLOCKS_X", blocks_all);
-  int blocks_y = getenv_int_default("MASS_MAPS_BLOCKS_Y", blocks_all);
-  int blocks_z = getenv_int_default("MASS_MAPS_BLOCKS_Z", blocks_all);
-  double cull_pad = getenv_double_default("MASS_MAPS_CULL_PAD_PHYS", MASS_MAPS_CULL_PAD_PHYS);
-  int thread_accum = getenv_int_default("MASS_MAPS_THREAD_ACCUM", 0); /* per-thread HEALPix accumulators */
+  /* Optional: Lagrangian sub-volume culling setup (compile-time controlled) */
+  int blocks_x = MASS_MAPS_BLOCKS_X;
+  int blocks_y = MASS_MAPS_BLOCKS_Y;
+  int blocks_z = MASS_MAPS_BLOCKS_Z;
+  double cull_pad = MASS_MAPS_CULL_PAD_PHYS;
+  /* Per-thread HEALPix accumulators: compile-time toggle */
+#ifdef MASS_MAPS_THREAD_ACCUM
+  int thread_accum = 1;
+#else
+  int thread_accum = 0;
+#endif
   /* Precompute cos(aperture) for conservative angular culling */
   double A = params.PLCAperture;
-  if (A > 90.0)
-    A = 90.0;
   double cosA = cos(A * (acos(-1.0) / 180.0));
   int nx_local = (int)MyGrids[0].GSlocal[_x_];
   int ny_local = (int)MyGrids[0].GSlocal[_y_];
@@ -1286,11 +1292,11 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
            fdate(), blocks_x, blocks_y, blocks_z, cull_pad, culling_enabled);
   }
 
-  /* Fixed buffer options: absolute phys value and/or fraction of block size */
-  double disp_fixed_phys = getenv_double_default("MASS_MAPS_DISP_BUFFER_FIXED_PHYS", -1.0);
-  double disp_frac = getenv_double_default("MASS_MAPS_DISP_BUFFER_FRAC", -1.0);
-  /* Last-segment displacement vs fixed-buffer diagnostics */
-  double warn_frac = getenv_double_default("MASS_MAPS_DISP_BUFFER_WARN_FRAC", 0.05); /* warn if >= this fraction exceed buffer */
+  /* Absolute phys value and/or fraction of block size (compile-time) */
+  double disp_fixed_phys = MASS_MAPS_DISP_BUFFER_FIXED_PHYS;
+  double disp_frac = MASS_MAPS_DISP_BUFFER_FRAC;
+  /* Last-segment displacement vs fixed-buffer diagnostics threshold */
+  double warn_frac = MASS_MAPS_DISP_BUFFER_WARN_FRAC;
   int last_segment = (segment_index == NMassSheets);
   int collect_disp_stats = (last_segment && disp_fixed_phys > 0.0);
   unsigned long long disp_total_local = 0ULL;  /* number of particles evaluated */
