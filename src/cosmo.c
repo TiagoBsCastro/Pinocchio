@@ -1914,8 +1914,8 @@ double InverseComovingDistance(double chi)
           for (int k = 0; k < n; ++k)
           {
             int kr = n - 1 - k;
-            xchi[k] = fwd->y[kr];      /* chi */
-            alog[k] = fwd->x[kr];      /* log10(a) */
+            xchi[k] = fwd->y[kr]; /* chi */
+            alog[k] = fwd->x[kr]; /* log10(a) */
           }
           /* Ensure the first x is non-negative strictly increasing; if tiny negative, clamp */
           if (xchi[0] < 0.0)
