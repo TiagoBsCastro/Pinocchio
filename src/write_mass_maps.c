@@ -64,6 +64,11 @@
 #include <omp.h>
 #endif
 
+#ifdef SNAPSHOT
+/* Forward declaration: back-distribute ZACC (and group_ID) from fragment sub-boxes to products FFT tiles */
+int distribute_back(void);
+#endif
+
 /* Local constants */
 #ifndef MASS_MAPS_Z_EPS
 #define MASS_MAPS_Z_EPS 1e-8
@@ -1080,6 +1085,20 @@ static inline void mass_maps_set_point_from_products_global(int ig, int jg, int 
 #endif
 }
 
+/* Accessor for per-particle collapse redshift ZACC using global lattice coords */
+#if defined(SNAPSHOT)
+static inline double mass_maps_get_zacc_global(int ig, int jg, int kg)
+{
+  int li = ig - (int)MyGrids[0].GSstart[_x_];
+  int lj = jg - (int)MyGrids[0].GSstart[_y_];
+  int lk = kg - (int)MyGrids[0].GSstart[_z_];
+  if (li < 0 || lj < 0 || lk < 0 || li >= (int)MyGrids[0].GSlocal[_x_] || lj >= (int)MyGrids[0].GSlocal[_y_] || lk >= (int)MyGrids[0].GSlocal[_z_])
+    return -1e30; /* out of range; treat as never collapsed */
+  unsigned int idx = COORD_TO_INDEX(li, lj, lk, MyGrids[0].GSlocal);
+  return (double)products[idx].zacc;
+}
+#endif
+
 /* ---------------------------------------------------------- */
 /* Products-based positions dump (no replication)             */
 /* ---------------------------------------------------------- */
@@ -1320,6 +1339,27 @@ int mass_maps_particle_sign_change(int rep_id,
  */
 void mass_maps_process_segment(int segment_index, double z_segment, int is_first_segment)
 {
+  /* Ensure ZACC values are available in products when filtering uncollapsed-only */
+#if defined(MASS_MAPS_FILTER_UNCOLLAPSED)
+#if defined(SNAPSHOT)
+  {
+    static int zacc_distributed_once = 0;
+    if (!zacc_distributed_once)
+    {
+      if (!ThisTask && internal.verbose_level >= VDIAG)
+        printf("[%s] MASS_MAPS(filter): distributing ZACC to products (one-time)\n", fdate());
+      int rc = distribute_back();
+      if (rc && !ThisTask)
+      {
+        fprintf(stderr, "[%s] MASS_MAPS(filter) WARNING: distribute_back() failed; ZACC may be unset (=-1) and the filter will include all.\n", fdate());
+      }
+      zacc_distributed_once = 1;
+    }
+  }
+#else
+#error "MASS_MAPS_FILTER_UNCOLLAPSED requires SNAPSHOT"
+#endif
+#endif
   /* One-time HEALPix map allocator */
   {
     static int hpix_init_done = 0;
@@ -1409,6 +1449,20 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
   /* We'll count local crossings per replication and reduce globally */
   unsigned long long total_crossings_all_reps = 0ULL;
   unsigned long long total_crossings_all_reps_global = 0ULL;
+#ifdef MASS_MAPS_FILTER_UNCOLLAPSED
+  /* Diagnostics for ZPLC>ZACC filter: count how many entries were considered and excluded */
+  unsigned long long zfilter_considered_local = 0ULL;
+  unsigned long long zfilter_excluded_local = 0ULL;
+  unsigned long long zfilter_considered_global = 0ULL;
+  unsigned long long zfilter_excluded_global = 0ULL;
+  /* Extra diagnostics: track ranges of z_plc and z_acc and check z_plc segment consistency */
+  double zplc_min_local = 1e99, zplc_max_local = -1e99;
+  double zacc_min_local = 1e99, zacc_max_local = -1e99;
+  double zplc_min_global = 0.0, zplc_max_global = 0.0;
+  double zacc_min_global = 0.0, zacc_max_global = 0.0;
+  unsigned long long zplc_out_of_segment_local = 0ULL;
+  unsigned long long zplc_out_of_segment_global = 0ULL;
+#endif
   /* Store local per-rep counts to reduce in one shot */
   unsigned long long *rep_crossings_local = NULL;
   unsigned long long *rep_crossings_global = NULL;
@@ -1757,6 +1811,60 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                     /* Angular aperture: only accumulate entries inside PLC cone */
                     if (!mass_maps_entry_inside_aperture(entry_pos))
                       continue;
+#ifdef MASS_MAPS_FILTER_UNCOLLAPSED
+                    {
+                      /* Filter: include only if ZPLC > ZACC */
+                      double dx = entry_pos[0] - c_phys[0];
+                      double dy = entry_pos[1] - c_phys[1];
+                      double dz = entry_pos[2] - c_phys[2];
+                      double r_entry = sqrt(dx * dx + dy * dy + dz * dz);
+                      double z_plc = InverseComovingDistance(r_entry);
+#ifdef SNAPSHOT
+                      double z_acc = mass_maps_get_zacc_global(ig, jg, kg);
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                      zfilter_considered_local++;
+                  /* Track min/max and consistency for debug */
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+                      {
+                        if (z_plc < zplc_min_local)
+                          zplc_min_local = z_plc;
+                        if (z_plc > zplc_max_local)
+                          zplc_max_local = z_plc;
+                        if (z_acc < zacc_min_local)
+                          zacc_min_local = z_acc;
+                        if (z_acc > zacc_max_local)
+                          zacc_max_local = z_acc;
+                      }
+                      {
+                        /* Check that z_plc lies within this segment bounds (tolerance at edges) */
+                        double zmin_seg = (z_prev < z_curr) ? z_prev : z_curr;
+                        double zmax_seg = (z_prev > z_curr) ? z_prev : z_curr;
+                        double tol = 1e-3;
+                        if (z_plc < zmin_seg - tol || z_plc > zmax_seg + tol)
+                        {
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                          zplc_out_of_segment_local++;
+                        }
+                      }
+                      if (!(z_plc > z_acc))
+                      {
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                        zfilter_excluded_local++;
+                        continue;
+                      }
+#else
+#error "MASS_MAPS_FILTER_UNCOLLAPSED requires SNAPSHOT"
+#endif
+                    }
+#endif
                     local_cross++;
                     if (s_map >= 0 && s_map < NMassSheets && MassMapNSIDE_current > 0)
                     {
@@ -1844,6 +1952,59 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                     /* Angular aperture: only accumulate entries inside PLC cone */
                     if (!mass_maps_entry_inside_aperture(entry_pos))
                       continue;
+#ifdef MASS_MAPS_FILTER_UNCOLLAPSED
+                    {
+                      double dx = entry_pos[0] - c_phys[0];
+                      double dy = entry_pos[1] - c_phys[1];
+                      double dz = entry_pos[2] - c_phys[2];
+                      double r_entry = sqrt(dx * dx + dy * dy + dz * dz);
+                      double z_plc = InverseComovingDistance(r_entry);
+#ifdef SNAPSHOT
+                      double z_acc = mass_maps_get_zacc_global(ig, jg, kg);
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                      zfilter_considered_local++;
+                  /* Track min/max and consistency for debug */
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+                      {
+                        if (z_plc < zplc_min_local)
+                          zplc_min_local = z_plc;
+                        if (z_plc > zplc_max_local)
+                          zplc_max_local = z_plc;
+                        if (z_acc < zacc_min_local)
+                          zacc_min_local = z_acc;
+                        if (z_acc > zacc_max_local)
+                          zacc_max_local = z_acc;
+                      }
+                      {
+                        /* Check that z_plc lies within this segment bounds (tolerance at edges) */
+                        double zmin_seg = (z_prev < z_curr) ? z_prev : z_curr;
+                        double zmax_seg = (z_prev > z_curr) ? z_prev : z_curr;
+                        double tol = 1e-3;
+                        if (z_plc < zmin_seg - tol || z_plc > zmax_seg + tol)
+                        {
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                          zplc_out_of_segment_local++;
+                        }
+                      }
+                      if (!(z_plc > z_acc))
+                      {
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                        zfilter_excluded_local++;
+                        continue;
+                      }
+#else
+#error "MASS_MAPS_FILTER_UNCOLLAPSED requires SNAPSHOT"
+#endif
+                    }
+#endif
                     local_cross++;
                     if (s_map >= 0 && s_map < NMassSheets && MassMapNSIDE_current > 0)
                     {
@@ -1986,6 +2147,59 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
               continue;
             if (!mass_maps_entry_inside_aperture(entry_pos))
               continue;
+#ifdef MASS_MAPS_FILTER_UNCOLLAPSED
+            {
+              double dx = entry_pos[0] - c_phys[0];
+              double dy = entry_pos[1] - c_phys[1];
+              double dz = entry_pos[2] - c_phys[2];
+              double r_entry = sqrt(dx * dx + dy * dy + dz * dz);
+              double z_plc = InverseComovingDistance(r_entry);
+#ifdef SNAPSHOT
+              double z_acc = mass_maps_get_zacc_global(ig, jg, kg);
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+              zfilter_considered_local++;
+              /* Track min/max and consistency for debug */
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+              {
+                if (z_plc < zplc_min_local)
+                  zplc_min_local = z_plc;
+                if (z_plc > zplc_max_local)
+                  zplc_max_local = z_plc;
+                if (z_acc < zacc_min_local)
+                  zacc_min_local = z_acc;
+                if (z_acc > zacc_max_local)
+                  zacc_max_local = z_acc;
+              }
+              {
+                /* Check that z_plc lies within this segment bounds (tolerance at edges) */
+                double zmin_seg = (z_prev < z_curr) ? z_prev : z_curr;
+                double zmax_seg = (z_prev > z_curr) ? z_prev : z_curr;
+                double tol = 1e-3;
+                if (z_plc < zmin_seg - tol || z_plc > zmax_seg + tol)
+                {
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                  zplc_out_of_segment_local++;
+                }
+              }
+              if (!(z_plc > z_acc))
+              {
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                zfilter_excluded_local++;
+                continue;
+              }
+#else
+#error "MASS_MAPS_FILTER_UNCOLLAPSED requires SNAPSHOT"
+#endif
+            }
+#endif
             ++rep_crossings;
             int s_map = segment_index - 1;
             if (s_map >= 0 && s_map < NMassSheets && MassMapNSIDE_current > 0)
@@ -2053,6 +2267,37 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
     printf("[%s] MASS_MAPS(products): segment %d total global entries across %d reps: %llu\n",
            fdate(), segment_index, MassMapSegmentReplicationCount, total_crossings_all_reps_global);
   }
+
+#ifdef MASS_MAPS_FILTER_UNCOLLAPSED
+  /* Reduce and report ZPLC>ZACC filter diagnostics */
+  MPI_Reduce(&zfilter_considered_local, &zfilter_considered_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+  MPI_Reduce(&zfilter_excluded_local, &zfilter_excluded_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+  /* Reduce extra diagnostics */
+  MPI_Reduce(&zplc_min_local, &zplc_min_global, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
+  MPI_Reduce(&zplc_max_local, &zplc_max_global, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+  MPI_Reduce(&zacc_min_local, &zacc_min_global, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
+  MPI_Reduce(&zacc_max_local, &zacc_max_global, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+  MPI_Reduce(&zplc_out_of_segment_local, &zplc_out_of_segment_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+  if (!ThisTask)
+  {
+    unsigned long long zf_included = (zfilter_considered_global >= zfilter_excluded_global)
+                                         ? (zfilter_considered_global - zfilter_excluded_global)
+                                         : 0ULL;
+    double frac_excl = (zfilter_considered_global > 0ULL)
+                           ? ((double)zfilter_excluded_global / (double)zfilter_considered_global)
+                           : 0.0;
+    printf("[%s] MASS_MAPS(filter): segment %d considered=%llu excluded=%llu (%.2f%%) included=%llu (%.2f%%)\n",
+           fdate(), segment_index,
+           zfilter_considered_global,
+           zfilter_excluded_global, 100.0 * frac_excl,
+           zf_included, 100.0 * (1.0 - frac_excl));
+    printf("[%s] MASS_MAPS(filter-diag): seg %d z_plc[min,max]=[%.6g, %.6g]  z_acc[min,max]=[%.6g, %.6g]  z_plc_out_of_seg=%llu\n",
+           fdate(), segment_index,
+           zplc_min_global, zplc_max_global,
+           zacc_min_global, zacc_max_global,
+           zplc_out_of_segment_global);
+  }
+#endif
 
   /* Report last-segment displacement vs fixed-buffer stats */
   if (collect_disp_stats)

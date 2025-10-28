@@ -31,6 +31,11 @@
 #include <gsl/gsl_interp2d.h>
 #include <gsl/gsl_spline2d.h>
 
+/* Lazy-built inverse comoving-distance spline: chi [Mpc] -> log10(a) */
+static gsl_spline *SPLINE_INVCOMVDIST = 0x0;
+static gsl_interp_accel *ACCEL_INVCOMVDIST = 0x0;
+static int INVCOMVDIST_READY = 0;
+
 #define NVAR (1 + NkBINS * 8)
 #define NBB 10
 #ifdef NORADIATION
@@ -1871,6 +1876,76 @@ double DiameterDistance(double z)
   if (da < 0.0)
     da = 0.0; /* guard against tiny negative overshoot */
   return da;
+}
+
+double InverseComovingDistance(double chi)
+{
+  /* redshift as a function of comoving distance, using an inverse spline
+     built once from the (log10 a) -> chi table. */
+  if (chi <= 0.0)
+    return 0.0;
+
+  if (!INVCOMVDIST_READY)
+  {
+#ifdef _OPENMP
+#pragma omp critical(invchi_init)
+    {
+      if (!INVCOMVDIST_READY)
+      {
+#endif
+        /* Build inverse mapping chi -> log10(a) from existing SPLINE[SP_COMVDIST] */
+        gsl_spline *fwd = SPLINE[SP_COMVDIST];
+        int n = fwd->size;
+        /* allocate temporary arrays */
+        double *xchi = (double *)malloc((size_t)n * sizeof(double));
+        double *alog = (double *)malloc((size_t)n * sizeof(double));
+        if (!xchi || !alog)
+        {
+          if (xchi)
+            free(xchi);
+          if (alog)
+            free(alog);
+          /* Mark as unavailable */
+          INVCOMVDIST_READY = 2;
+        }
+        else
+        {
+          /* Reverse order so that chi is strictly increasing (from ~0 to max) */
+          for (int k = 0; k < n; ++k)
+          {
+            int kr = n - 1 - k;
+            xchi[k] = fwd->y[kr];      /* chi */
+            alog[k] = fwd->x[kr];      /* log10(a) */
+          }
+          /* Ensure the first x is non-negative strictly increasing; if tiny negative, clamp */
+          if (xchi[0] < 0.0)
+            xchi[0] = 0.0;
+          /* Allocate and init inverse spline */
+          SPLINE_INVCOMVDIST = gsl_spline_alloc(gsl_interp_cspline, n);
+          ACCEL_INVCOMVDIST = gsl_interp_accel_alloc();
+          gsl_spline_init(SPLINE_INVCOMVDIST, xchi, alog, n);
+          free(alog);
+          free(xchi);
+          INVCOMVDIST_READY = 1;
+        }
+#ifdef _OPENMP
+      }
+    }
+#endif
+  }
+
+  if (INVCOMVDIST_READY != 1)
+    return 0.0;
+
+  /* Evaluate log10(a) at chi and convert to z */
+  double alog = my_spline_eval(SPLINE_INVCOMVDIST, chi, ACCEL_INVCOMVDIST);
+  double a = pow(10., alog);
+  if (a <= 0.0)
+    return 0.0;
+  double z = 1.0 / a - 1.0;
+  if (z < 0.0)
+    z = 0.0; /* clamp negative round-off */
+  return z;
 }
 
 double SizeForMass(double m)
