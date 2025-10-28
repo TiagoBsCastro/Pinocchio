@@ -26,3 +26,20 @@ Papers:
 7. Approximated methods for the generation of dark matter halo catalogs in the age of precision cosmology, P.Monaco, 2016, Galaxies, N. 4, 53, special issue: "Dark Matter: Large versus Small Scale Structures", ed. J. Gaite & A. Diaferio. [PDF](http://adlibitum.oats.inaf.it/monaco/Papers/monaco.2016.Galaxies.4.53.pdf)
 8. Fast numerical method to generate halo catalogues in modified gravity (part I): second-order Lagrangian perturbation theory, C. Moretti, S. Mozzon, P. Monaco, E. Munari, M. Baldi, M. 2020, MNRAS, 493, 1153 [PDF](http://adlibitum.oats.inaf.it/monaco/Papers/moretti.2020.mnras.493.1153.pdf)
 9. Euclid Preparation. Simulating thousands of Euclid spectroscopic skies, Euclid Consortium: P. Monaco, G. Parimbelli, Y. Elkhashab et al., in preparation.
+
+## MASS_MAPS output (HEALPix)
+
+When MASS_MAPS is enabled and a PLC is defined, the code writes one HEALPix map per segment:
+
+- Ordering: RING (always)
+ - Compact cap: by default, only the spherical cap within the PLC aperture is stored as a partial-sky HEALPix BINTABLE using EXPLICIT indexing (PIXEL, SIGNAL columns). We also include FIRSTPIX=0, LASTPIX=Ncap-1 for convenience. Set MASS_MAPS_FULLSKY_OUTPUT at compile time to write full-sky IMAGE HDUs instead.
+ - Metadata: PIXTYPE='HEALPIX', ORDERING='RING', NSIDE, INDXSCHM='EXPLICIT' (for partial), APERTURE (deg), AXISV1/2/3 (PLC axis vector components).
+
+Load with healpy (partial-sky):
+
+```python
+import healpy as hp
+mp = hp.read_map('pinocchio.<RunFlag>.massmap.segXXX.fits', partial=True, nest=False, dtype=float)
+```
+
+Note: Pixels are indexed in RING order with the PLC axis at pixel 0 (north pole in the internal PLC basis). For aperture=180 deg the map is full-sky and can be read without `partial=True`.

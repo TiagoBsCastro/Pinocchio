@@ -125,6 +125,14 @@ static double MassMapPLC_e1[3] = {1.0, 0.0, 0.0};
 static double MassMapPLC_e2[3] = {0.0, 1.0, 0.0};
 static double MassMapPLC_e3[3] = {0.0, 0.0, 1.0};
 static int MassMapPLC_BasisReady = 0;
+/* Cache of cap size for current NSIDE (when using partial-sky) */
+static long MassMapNCAP = 0;
+
+/* Optional: keep full-sky output (IMAGE HDU) even if aperture < 180 */
+#ifndef MASS_MAPS_FULLSKY_OUTPUT
+/* Undefine or set to 0 to use compact partial-sky by default */
+#define MASS_MAPS_FULLSKY_OUTPUT 0
+#endif
 
 static inline void mass_maps_cache_plc_basis_and_center(void)
 {
@@ -337,6 +345,70 @@ static inline long mass_maps_npix_from_nside(int nside)
   return 12L * (long)nside * (long)nside;
 }
 
+/* Compute number of RING pixels in a spherical cap of aperture (deg) centered at theta=0 (PLC axis)
+   using HEALPix ring formulas. Returns a contiguous prefix length [0..NPIX]. */
+static long mass_maps_ncap_from_aperture(int nside, double aperture_deg)
+{
+  if (nside <= 0)
+    return 0;
+  long npix_full = mass_maps_npix_from_nside(nside);
+  /* Clamp aperture to [0,180] */
+  if (aperture_deg <= 0.0)
+    return 0;
+  if (aperture_deg >= 180.0)
+    return npix_full;
+  double pi = acos(-1.0);
+  double theta_cap = aperture_deg * (pi / 180.0);
+  double z0 = cos(theta_cap); /* include rings with z >= z0 */
+
+  long ncap = 0;
+  int N = nside;
+
+  /* North polar rings: i = 1..N-1, z_i = 1 - i^2/(3 N^2), npix_i = 4 i */
+  double tmp = 3.0 * (double)N * (double)N * (1.0 - z0);
+  long ipolar_max = (long)floor(sqrt(fmax(0.0, tmp)) + 1e-12);
+  if (ipolar_max > (long)N - 1)
+    ipolar_max = (long)N - 1;
+  if (ipolar_max > 0)
+  {
+    /* sum_{i=1}^{ipolar_max} 4 i = 2 * ipolar_max * (ipolar_max + 1) */
+    ncap += 2L * ipolar_max * (ipolar_max + 1L);
+  }
+
+  /* Equatorial rings: i = N..3N, z_i = (4N - 2i)/(3N), npix_i = 4N */
+  double i2max_d = ((4.0 * N) - 3.0 * N * z0) / 2.0;
+  long i2_max = (long)floor(i2max_d + 1e-12);
+  if (i2_max > 3L * N)
+    i2_max = 3L * N;
+  if (i2_max >= (long)N)
+  {
+    long neq_rings = i2_max - (long)N + 1L;
+    if (neq_rings > 0)
+      ncap += (long)(4L * (long)N) * neq_rings;
+  }
+
+  /* South polar rings: i = 3N+1..4N-1, z_i = -1 + m^2/(3N^2), where m = 4N - i, npix_i = 4 m */
+  if (i2_max >= 3L * N)
+  {
+    /* Only if cap extends beyond equatorial band */
+    double tmp_s = 3.0 * (double)N * (double)N * (1.0 + z0);
+    long m_min = (long)ceil(sqrt(fmax(0.0, tmp_s)) - 1e-12);
+    if (m_min < 1)
+      m_min = 1;
+    if (m_min <= (long)N - 1)
+    {
+      long m_max = (long)N - 1;
+      long count = m_max - m_min + 1L;
+      /* sum_{m=m_min}^{m_max} 4 m = 4 * ( (m_min + m_max) * count / 2 ) */
+      long sum_m = (m_min + m_max) * count;
+      ncap += 2L * sum_m;
+    }
+  }
+  if (ncap > npix_full)
+    ncap = npix_full;
+  return ncap;
+}
+
 /* Accessor: pointer to segment s map (size MassMapNPIX) */
 static inline double *mass_maps_segment_ptr(int s)
 {
@@ -344,6 +416,9 @@ static inline double *mass_maps_segment_ptr(int s)
     return NULL;
   return MassMapSegmentMaps + ((long)s) * MassMapNPIX;
 }
+
+/* Forward decl: returns pole pixel (theta=0) in RING ordering */
+static inline long mass_maps_axis_pixel_ring(int nside);
 
 /* Zero all maps */
 static void mass_maps_zero_all_maps(void)
@@ -381,7 +456,23 @@ int mass_maps_init_healpix_maps(int nside)
   /* (Re)allocate */
   mass_maps_free_maps();
   MassMapNSIDE_current = nside;
-  MassMapNPIX = mass_maps_npix_from_nside(nside);
+  long npix_full = mass_maps_npix_from_nside(nside);
+  MassMapNCAP = mass_maps_ncap_from_aperture(nside, params.PLCAperture);
+#if MASS_MAPS_FULLSKY_OUTPUT
+  MassMapNPIX = npix_full;
+#else
+  MassMapNPIX = MassMapNCAP;
+#endif
+  if (MassMapNPIX <= 0)
+  {
+    /* Ensure we still have a valid array; keep zero-sized map disabled */
+    if (!ThisTask)
+      fprintf(stderr, "MASS_MAPS WARNING: computed Ncap=0 for NSIDE=%d, aperture=%.6g deg. Maps disabled.\n", nside, params.PLCAperture);
+    MassMapNSIDE_current = 0;
+    MassMapNPIX = 0;
+    MassMapNCAP = 0;
+    return 1;
+  }
   long total = (long)NMassSheets * MassMapNPIX;
   MassMapSegmentMaps = (double *)malloc(sizeof(double) * (size_t)total);
   if (!MassMapSegmentMaps)
@@ -390,12 +481,23 @@ int mass_maps_init_healpix_maps(int nside)
       fprintf(stderr, "MASS_MAPS ERROR: cannot allocate HEALPix maps (segments=%d npix=%ld total=%ld).\n", NMassSheets, MassMapNPIX, total);
     MassMapNSIDE_current = 0;
     MassMapNPIX = 0;
+    MassMapNCAP = 0;
     return 1;
   }
   mass_maps_zero_all_maps();
 
   if (!ThisTask && internal.verbose_level >= VDIAG)
-    printf("[%s] MASS_MAPS: allocated HEALPix maps NSIDE=%d npix=%ld segments=%d\n", fdate(), nside, MassMapNPIX, NMassSheets);
+  {
+    long axis_pix = mass_maps_axis_pixel_ring(nside);
+    printf("[%s] MASS_MAPS: allocated HEALPix maps ORDERING=RING NSIDE=%d fullNPIX=%ld aperture=%.6gdeg Ncap=%ld using_%s npix=%ld segments=%d axis_pix=%ld\n",
+           fdate(), nside, npix_full, params.PLCAperture, MassMapNCAP,
+#if MASS_MAPS_FULLSKY_OUTPUT
+           "FULLSKY",
+#else
+           "CAP",
+#endif
+           MassMapNPIX, NMassSheets, axis_pix);
+  }
   return 0;
 }
 
@@ -522,7 +624,7 @@ static inline void aabb_distance_bounds_to_point(const double minv[3], const dou
 /* no env accessors: all mass-maps culling knobs are compile-time macros now */
 
 /* Compute HEALPix pixel directly from an absolute position (phys units) */
-int mass_maps_compute_pixel_from_pos(const double pos[3], int nside, int nest, long *pix_out)
+int mass_maps_compute_pixel_from_pos(const double pos[3], int nside, long *pix_out)
 {
   if (!pix_out || nside <= 0)
     return 0;
@@ -554,10 +656,8 @@ int mass_maps_compute_pixel_from_pos(const double pos[3], int nside, int nest, l
     phi += twopi;
   }
   long ipix = -1;
-  if (nest)
-    ang2pix_nest((long)nside, theta, phi, &ipix);
-  else
-    ang2pix_ring((long)nside, theta, phi, &ipix);
+  /* RING-only ordering */
+  ang2pix_ring((long)nside, theta, phi, &ipix);
   if (ipix < 0)
     return 0;
   *pix_out = ipix;
@@ -572,12 +672,13 @@ static inline void mass_maps_accumulate_entry_pos(int s,
   if (s < 0 || s >= NMassSheets || MassMapNSIDE_current <= 0)
     return;
   long ipix;
-  if (!mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, 0 /*RING*/, &ipix))
+  if (!mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, &ipix))
     return;
   double *map = mass_maps_segment_ptr(s);
   if (!map)
     return;
-  map[ipix] += weight;
+  if ((unsigned long)ipix < (unsigned long)MassMapNPIX)
+    map[ipix] += weight;
 }
 
 /* Write a single segment's HEALPix map (RING ordering) to a FITS file on task 0 */
@@ -609,6 +710,8 @@ int mass_maps_write_segment_map(int s)
     fits_report_error(stderr, status);
     return 1;
   }
+  /* Choose output format: full-sky IMAGE or partial-sky BINTABLE (IMPLICIT indexing) */
+#if MASS_MAPS_FULLSKY_OUTPUT
   fits_create_img(fptr, DOUBLE_IMG, 1, naxes, &status);
   if (status)
   {
@@ -616,28 +719,83 @@ int mass_maps_write_segment_map(int s)
     fits_close_file(fptr, &status);
     return 1;
   }
-
-  /* HEALPix metadata */
-  char pixtype[] = "HEALPIX";
-  char ordering[] = "RING";
-  fits_update_key(fptr, TSTRING, "PIXTYPE", pixtype, "HEALPix pixelisation", &status);
-  fits_update_key(fptr, TSTRING, "ORDERING", ordering, "Pixel ordering scheme (RING/NESTED)", &status);
-  fits_update_key(fptr, TINT, "NSIDE", &MassMapNSIDE_current, "HEALPix NSIDE", &status);
-  long firstpix = 0;
-  long lastpix = MassMapNPIX - 1;
-  fits_update_key(fptr, TLONG, "FIRSTPIX", &firstpix, "First pixel number (0-based)", &status);
-  fits_update_key(fptr, TLONG, "LASTPIX", &lastpix, "Last pixel number (0-based)", &status);
-
-  /* Write data */
-  long fpixel = 1; /* FITS 1-based */
-  long nelem = MassMapNPIX;
-  fits_write_img(fptr, TDOUBLE, fpixel, nelem, map, &status);
+  {
+    /* HEALPix metadata */
+    char pixtype[] = "HEALPIX";
+    char ordering[] = "RING";
+    fits_update_key(fptr, TSTRING, "PIXTYPE", pixtype, "HEALPix pixelisation", &status);
+    fits_update_key(fptr, TSTRING, "ORDERING", ordering, "Pixel ordering scheme (RING/NESTED)", &status);
+    fits_update_key(fptr, TINT, "NSIDE", &MassMapNSIDE_current, "HEALPix NSIDE", &status);
+    long firstpix = 0;
+    long lastpix = MassMapNPIX - 1;
+    fits_update_key(fptr, TLONG, "FIRSTPIX", &firstpix, "First pixel number (0-based)", &status);
+    fits_update_key(fptr, TLONG, "LASTPIX", &lastpix, "Last pixel number (0-based)", &status);
+    /* Additional context */
+    fits_update_key(fptr, TDOUBLE, "APERTURE", &params.PLCAperture, "PLC cone aperture (deg)", &status);
+    fits_update_key(fptr, TDOUBLE, "AXISV1", &plc.zvers[0], "PLC axis x-component", &status);
+    fits_update_key(fptr, TDOUBLE, "AXISV2", &plc.zvers[1], "PLC axis y-component", &status);
+    fits_update_key(fptr, TDOUBLE, "AXISV3", &plc.zvers[2], "PLC axis z-component", &status);
+  }
+  {
+    /* Write data */
+    long fpixel = 1; /* FITS 1-based */
+    long nelem = MassMapNPIX;
+    fits_write_img(fptr, TDOUBLE, fpixel, nelem, map, &status);
+  }
+#else
+  /* Partial-sky in a binary table; choose EXPLICIT indexing for broad compatibility */
+  int tfields = 2;
+  char *ttype[] = {"PIXEL", "SIGNAL"};
+  char *tform[] = {"1J", "1D"};
+  char *tunit[] = {"", ""};
+  long nrows = MassMapNPIX;
+  fits_create_tbl(fptr, BINARY_TBL, nrows, tfields, ttype, tform, tunit, "HEALPIX", &status);
   if (status)
   {
     fits_report_error(stderr, status);
     fits_close_file(fptr, &status);
     return 1;
   }
+  {
+    /* HEALPix metadata */
+    char pixtype[] = "HEALPIX";
+    char ordering[] = "RING";
+    char idxschm[] = "EXPLICIT";
+    fits_update_key(fptr, TSTRING, "PIXTYPE", pixtype, "HEALPix pixelisation", &status);
+    fits_update_key(fptr, TSTRING, "ORDERING", ordering, "Pixel ordering scheme (RING)", &status);
+    fits_update_key(fptr, TINT, "NSIDE", &MassMapNSIDE_current, "HEALPix NSIDE", &status);
+    fits_update_key(fptr, TSTRING, "INDXSCHM", idxschm, "Indexing: EXPLICIT (PIXEL column)", &status);
+    /* Explicit indexing: we also include FIRSTPIX/LASTPIX for convenience */
+    long firstpix = 0;
+    long lastpix = MassMapNPIX - 1; /* 0..Ncap-1 */
+    fits_update_key(fptr, TLONG, "FIRSTPIX", &firstpix, "First pixel number (0-based)", &status);
+    fits_update_key(fptr, TLONG, "LASTPIX", &lastpix, "Last pixel number (0-based)", &status);
+    /* Context: PLC geometry */
+    fits_update_key(fptr, TDOUBLE, "APERTURE", &params.PLCAperture, "PLC cone aperture (deg)", &status);
+    fits_update_key(fptr, TDOUBLE, "AXISV1", &plc.zvers[0], "PLC axis x-component", &status);
+    fits_update_key(fptr, TDOUBLE, "AXISV2", &plc.zvers[1], "PLC axis y-component", &status);
+    fits_update_key(fptr, TDOUBLE, "AXISV3", &plc.zvers[2], "PLC axis z-component", &status);
+  }
+  {
+    /* Write columns: PIXEL (0..Ncap-1) and SIGNAL */
+    long firstrow = 1;  /* 1-based */
+    long firstelem = 1; /* scalar */
+    long nelements = MassMapNPIX;
+    /* Build pixel index array */
+    int *pix_index = (int *)malloc(sizeof(int) * (size_t)MassMapNPIX);
+    if (!pix_index)
+    {
+      fits_report_error(stderr, status);
+      fits_close_file(fptr, &status);
+      return 1;
+    }
+    for (long i = 0; i < MassMapNPIX; ++i)
+      pix_index[i] = (int)i;
+    fits_write_col(fptr, TINT, 1, firstrow, firstelem, nelements, pix_index, &status);
+    free(pix_index);
+    fits_write_col(fptr, TDOUBLE, 2, firstrow, firstelem, nelements, map, &status);
+  }
+#endif
 
   fits_close_file(fptr, &status);
   if (status)
@@ -646,7 +804,13 @@ int mass_maps_write_segment_map(int s)
     return 1;
   }
   if (internal.verbose_level >= VDIAG)
-    printf("[%s] MASS_MAPS: wrote %s (NSIDE=%d NPIX=%ld)\n", fdate(), fname, MassMapNSIDE_current, MassMapNPIX);
+    printf("[%s] MASS_MAPS: wrote %s (NSIDE=%d NPIX=%ld, format=%s)\n", fdate(), fname, MassMapNSIDE_current, MassMapNPIX,
+#if MASS_MAPS_FULLSKY_OUTPUT
+           "IMAGE"
+#else
+           "BINTABLE"
+#endif
+    );
   return 0;
 }
 
@@ -1498,6 +1662,7 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
           double *LocalMap = NULL;
           if (thread_accum && MassMapNSIDE_current > 0)
             LocalMap = (double *)calloc((size_t)MassMapNPIX, sizeof(double));
+          unsigned long long ipix_oob_local = 0ULL; /* guard counter */
           int use_cache = (PosPrevBuf && PosCurrBuf);
           if (use_cache)
           {
@@ -1596,19 +1761,26 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                     if (s_map >= 0 && s_map < NMassSheets && MassMapNSIDE_current > 0)
                     {
                       long ipix;
-                      if (mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, 0, &ipix))
+                      if (mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, &ipix))
                       {
-                        if (LocalMap)
+                        if ((unsigned long)ipix < (unsigned long)MassMapNPIX)
                         {
-                          LocalMap[ipix] += 1.0;
-                        }
-                        else
-                        {
-                          double *map = mass_maps_segment_ptr(s_map);
+                          if (LocalMap)
+                          {
+                            LocalMap[ipix] += 1.0;
+                          }
+                          else
+                          {
+                            double *map = mass_maps_segment_ptr(s_map);
 #ifdef _OPENMP
 #pragma omp atomic update
 #endif
-                          map[ipix] += 1.0;
+                            map[ipix] += 1.0;
+                          }
+                        }
+                        else
+                        {
+                          ipix_oob_local++;
                         }
                       }
                     }
@@ -1676,19 +1848,19 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                     if (s_map >= 0 && s_map < NMassSheets && MassMapNSIDE_current > 0)
                     {
                       long ipix;
-                      if (mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, 0, &ipix))
+                      if (mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, &ipix))
                       {
-                        if (LocalMap)
-                        {
-                          LocalMap[ipix] += 1.0;
-                        }
-                        else
+                        if ((unsigned long)ipix < (unsigned long)MassMapNPIX)
                         {
                           double *map = mass_maps_segment_ptr(s_map);
 #ifdef _OPENMP
 #pragma omp atomic update
 #endif
                           map[ipix] += 1.0;
+                        }
+                        else
+                        {
+                          ipix_oob_local++;
                         }
                       }
                     }
@@ -1744,6 +1916,11 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                 map[i] += v;
               }
             }
+          }
+          if (ipix_oob_local > 0ULL && internal.verbose_level >= VDBG)
+          {
+            /* Per-block debug: report any out-of-cap pixel indices (should be zero) */
+            printf("[%s] MASS_MAPS WARN: block (%d,%d,%d) ipix>=Ncap occurrences: %llu\n", fdate(), bx_i, by, bz, ipix_oob_local);
           }
           if (PosPrevBuf)
             free(PosPrevBuf);
@@ -1814,8 +1991,10 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
             if (s_map >= 0 && s_map < NMassSheets && MassMapNSIDE_current > 0)
             {
               long ipix;
-              if (mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, 0, &ipix))
+              if (mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, &ipix))
               {
+                if ((unsigned long)ipix >= (unsigned long)MassMapNPIX)
+                  continue; /* guard */
                 double *map = mass_maps_segment_ptr(s_map);
 #ifdef _OPENMP
 #pragma omp atomic update
