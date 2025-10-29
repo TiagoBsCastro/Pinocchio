@@ -64,10 +64,140 @@
 #include <omp.h>
 #endif
 
+/* ---------------------------------------------------------- */
+/* Optional: carry ZPLC>ZACC filter diagnostics into FITS     */
+/* ---------------------------------------------------------- */
+typedef struct
+{
+  /* Totals */
+  long long considered;
+  long long excluded;
+  long long included;
+  double frac_excluded;
+  /* Ranges and consistency */
+  double zplc_min, zplc_max;
+  double zacc_min, zacc_max;
+  long long zplc_out_of_segment;
+  /* Segment id for context */
+  int segment_index;
+  /* Flag */
+  int present;
+} MassMapsFilterDiag;
+
+static MassMapsFilterDiag g_massmaps_filter_diag = {0};
+
+/* Write FILTER-related header keywords if available */
+static void mass_maps_write_filter_keywords(fitsfile *fptr, int segment_index)
+{
+#ifdef MASS_MAPS_FILTER_UNCOLLAPSED
+  if (!fptr)
+    return;
+  if (!g_massmaps_filter_diag.present)
+    return;
+  if (g_massmaps_filter_diag.segment_index != segment_index)
+  {
+    /* Stale or mismatched diagnostics; skip to avoid wrong metadata */
+    return;
+  }
+  int status = 0;
+  {
+    char filter_desc[] = "ZPLC>ZACC";
+    fits_update_key(fptr, TSTRING, "FILTER", filter_desc, "Mass-maps inclusion filter", &status);
+  }
+  {
+    long long considered = g_massmaps_filter_diag.considered;
+    long long excluded = g_massmaps_filter_diag.excluded;
+    long long included = g_massmaps_filter_diag.included;
+    double frac_ex = g_massmaps_filter_diag.frac_excluded;
+    fits_update_key(fptr, TLONGLONG, "ZF_CONS", &considered, "Entries considered by filter", &status);
+    fits_update_key(fptr, TLONGLONG, "ZF_EXCL", &excluded, "Entries excluded by filter", &status);
+    fits_update_key(fptr, TLONGLONG, "ZF_INCL", &included, "Entries included after filter", &status);
+    fits_update_key(fptr, TDOUBLE, "ZF_FEXCL", &frac_ex, "Excluded fraction (0..1)", &status);
+  }
+  {
+    double zplc_min = g_massmaps_filter_diag.zplc_min;
+    double zplc_max = g_massmaps_filter_diag.zplc_max;
+    double zacc_min = g_massmaps_filter_diag.zacc_min;
+    double zacc_max = g_massmaps_filter_diag.zacc_max;
+    long long outseg = g_massmaps_filter_diag.zplc_out_of_segment;
+    fits_update_key(fptr, TDOUBLE, "ZPLC_MIN", &zplc_min, "Min PLC redshift encountered", &status);
+    fits_update_key(fptr, TDOUBLE, "ZPLC_MAX", &zplc_max, "Max PLC redshift encountered", &status);
+    fits_update_key(fptr, TDOUBLE, "ZACC_MIN", &zacc_min, "Min collapse redshift (ZACC)", &status);
+    fits_update_key(fptr, TDOUBLE, "ZACC_MAX", &zacc_max, "Max collapse redshift (ZACC)", &status);
+    fits_update_key(fptr, TLONGLONG, "ZPLC_OOS", &outseg, "Count of z_plc outside segment bounds (tolerance)", &status);
+  }
+  {
+    /* Add concise HISTORY lines */
+    char hist[128];
+    snprintf(hist, sizeof(hist), "FILTER: seg=%d ZPLC>ZACC considered=%lld excluded=%lld included=%lld",
+             segment_index,
+             (long long)g_massmaps_filter_diag.considered,
+             (long long)g_massmaps_filter_diag.excluded,
+             (long long)g_massmaps_filter_diag.included);
+    fits_write_history(fptr, hist, &status);
+  }
+  if (status)
+  {
+    /* Non-fatal: report but continue */
+    fits_report_error(stderr, status);
+  }
+#else
+  (void)fptr;
+  (void)segment_index;
+#endif
+}
+
 #ifdef SNAPSHOT
 /* Forward declaration: back-distribute ZACC (and group_ID) from fragment sub-boxes to products FFT tiles */
 int distribute_back(void);
 #endif
+
+/* Optional matching diagnostics: relate excluded entries to PLC halo catalog */
+#ifdef MASS_MAPS_MATCH_DIAG
+static int mass_maps_matchdiag_inited = 0;
+static unsigned long long *mass_maps_plc_names = NULL;
+static int mass_maps_plc_n = 0;
+
+static int cmp_ull(const void *a, const void *b)
+{
+  unsigned long long aa = *(const unsigned long long *)a;
+  unsigned long long bb = *(const unsigned long long *)b;
+  return (aa < bb) ? -1 : (aa > bb) ? 1
+                                    : 0;
+}
+
+static void mass_maps_matchdiag_init(void)
+{
+  if (mass_maps_matchdiag_inited)
+    return;
+  /* Build a sorted list of PLC group names for fast membership testing */
+  if (plc.Nstored > 0 && plcgroups)
+  {
+    mass_maps_plc_n = plc.Nstored;
+    mass_maps_plc_names = (unsigned long long *)malloc(sizeof(unsigned long long) * (size_t)mass_maps_plc_n);
+    if (mass_maps_plc_names)
+    {
+      for (int i = 0; i < mass_maps_plc_n; ++i)
+        mass_maps_plc_names[i] = plcgroups[i].name;
+      qsort(mass_maps_plc_names, (size_t)mass_maps_plc_n, sizeof(unsigned long long), cmp_ull);
+    }
+  }
+  mass_maps_matchdiag_inited = 1;
+}
+
+static inline int mass_maps_group_in_plc_by_id(int gid)
+{
+  if (gid <= 0)
+    return 0;
+  if (!mass_maps_matchdiag_inited)
+    mass_maps_matchdiag_init();
+  if (!mass_maps_plc_names || mass_maps_plc_n <= 0)
+    return 0;
+  /* Lookup by unique group name */
+  unsigned long long key = groups[gid].name;
+  return bsearch(&key, mass_maps_plc_names, (size_t)mass_maps_plc_n, sizeof(unsigned long long), cmp_ull) != NULL;
+}
+#endif /* MASS_MAPS_MATCH_DIAG */
 
 /* Local constants */
 #ifndef MASS_MAPS_Z_EPS
@@ -740,6 +870,8 @@ int mass_maps_write_segment_map(int s)
     fits_update_key(fptr, TDOUBLE, "AXISV1", &plc.zvers[0], "PLC axis x-component", &status);
     fits_update_key(fptr, TDOUBLE, "AXISV2", &plc.zvers[1], "PLC axis y-component", &status);
     fits_update_key(fptr, TDOUBLE, "AXISV3", &plc.zvers[2], "PLC axis z-component", &status);
+    /* Filter metadata (if available) */
+    mass_maps_write_filter_keywords(fptr, s);
   }
   {
     /* Write data */
@@ -780,6 +912,8 @@ int mass_maps_write_segment_map(int s)
     fits_update_key(fptr, TDOUBLE, "AXISV1", &plc.zvers[0], "PLC axis x-component", &status);
     fits_update_key(fptr, TDOUBLE, "AXISV2", &plc.zvers[1], "PLC axis y-component", &status);
     fits_update_key(fptr, TDOUBLE, "AXISV3", &plc.zvers[2], "PLC axis z-component", &status);
+    /* Filter metadata (if available) */
+    mass_maps_write_filter_keywords(fptr, s);
   }
   {
     /* Write columns: PIXEL (0..Ncap-1) and SIGNAL */
@@ -875,7 +1009,6 @@ int mass_maps_write_sheet_table(void)
  * Returns 1 if intervals intersect, else 0. Performs bounds checks.
  * NOTE: This is an approximate radial filter; angular aperture is NOT tested here.
  */
-/* (removed) mass_maps_replication_overlaps_sheet: unused after simplifying selection */
 
 /* Return replication radial chi bounds via stored scale factors (1+z) */
 static inline void mass_maps_replication_chi_bounds(int rep_id, double *rmin, double *rmax)
@@ -1097,93 +1230,19 @@ static inline double mass_maps_get_zacc_global(int ig, int jg, int kg)
   unsigned int idx = COORD_TO_INDEX(li, lj, lk, MyGrids[0].GSlocal);
   return (double)products[idx].zacc;
 }
-#endif
 
-/* ---------------------------------------------------------- */
-/* Products-based positions dump (no replication)             */
-/* ---------------------------------------------------------- */
-void mass_maps_dump_positions_products_for_segment(int s)
+/* Accessor for per-particle group_ID using global lattice coords (0 if none) */
+static inline int mass_maps_get_group_id_global(int ig, int jg, int kg)
 {
-  if (s <= 0 || s > ScaleDep.myseg)
-    return; /* need a previous boundary */
-
-  /* Determine LPT order compiled in */
-  int lpt_order = 1;
-#ifdef TWO_LPT
-  lpt_order = 2;
-#ifdef THREE_LPT
-  lpt_order = 3;
-#endif
-#endif
-
-  double z_prev = ScaleDep.z[s - 1];
-  double z_curr = ScaleDep.z[s];
-  PRODFLOAT Fseg = (PRODFLOAT)(z_curr + 1.0);
-  /* For distance diagnostics */
-  double chi_prev = ComovingDistance(z_prev);
-  double chi_curr = ComovingDistance(z_curr);
-  double c0 = plc.center[0] * params.InterPartDist;
-  double c1 = plc.center[1] * params.InterPartDist;
-  double c2 = plc.center[2] * params.InterPartDist;
-
-  char fname[3 * LBLENGTH];
-  snprintf(fname, sizeof(fname), "pinocchio.%s.positions.products.seg%03d.task%05d.out",
-           params.RunFlag, s, ThisTask);
-  FILE *fd = fopen(fname, "w");
-  if (!fd)
-  {
-    if (!ThisTask)
-      fprintf(stderr, "MASS_MAPS dump ERROR: cannot open %s for writing.\n", fname);
-    return;
-  }
-  fprintf(fd, "# products-tile positions dump for segment %d: z_prev=%.8f z_curr=%.8f (Task %d)\n",
-          s, z_prev, z_curr, ThisTask);
-  /* Box sizes in physical units for diagnostics */
-  double Bx = MyGrids[0].GSglobal[_x_] * params.InterPartDist;
-  double By = MyGrids[0].GSglobal[_y_] * params.InterPartDist;
-  double Bz = MyGrids[0].GSglobal[_z_] * params.InterPartDist;
-  fprintf(fd, "# PLC center (phys units): %.9g %.9g %.9g  InterPartDist=%.9g  BoxSize=(%.9g, %.9g, %.9g)\n",
-          c0, c1, c2, params.InterPartDist, Bx, By, Bz);
-  fprintf(fd, "# ig jg kg  x_prev y_prev z_prev  x_curr y_curr z_curr  r_prev r_curr chi_prev chi_curr\n");
-
-  int ig_start = (int)MyGrids[0].GSstart[_x_];
-  int jg_start = (int)MyGrids[0].GSstart[_y_];
-  int kg_start = (int)MyGrids[0].GSstart[_z_];
-  int ig_end = ig_start + (int)MyGrids[0].GSlocal[_x_];
-  int jg_end = jg_start + (int)MyGrids[0].GSlocal[_y_];
-  int kg_end = kg_start + (int)MyGrids[0].GSlocal[_z_];
-
-  for (int ig = ig_start; ig < ig_end; ++ig)
-  {
-    for (int jg = jg_start; jg < jg_end; ++jg)
-    {
-      for (int kg = kg_start; kg < kg_end; ++kg)
-      {
-        pos_data obj;
-        mass_maps_set_point_from_products_global(ig, jg, kg, Fseg, &obj);
-        if (obj.M == 0)
-          continue; /* safety guard */
-
-        double pos_prev[3], pos_curr[3];
-        mass_maps_compute_prev_curr_positions(&obj, pos_prev, pos_curr, lpt_order);
-        /* Distances to PLC center in physical units (no replication shift here) */
-        double dxp0 = pos_prev[0] - c0, dyp0 = pos_prev[1] - c1, dzp0 = pos_prev[2] - c2;
-        double dxp1 = pos_curr[0] - c0, dyp1 = pos_curr[1] - c1, dzp1 = pos_curr[2] - c2;
-        double r_prev = sqrt(dxp0 * dxp0 + dyp0 * dyp0 + dzp0 * dzp0);
-        double r_curr = sqrt(dxp1 * dxp1 + dyp1 * dyp1 + dzp1 * dzp1);
-
-        fprintf(fd, "%d %d %d  %.9g %.9g %.9g  %.9g %.9g %.9g  %.9g %.9g %.9g %.9g\n",
-                ig, jg, kg,
-                pos_prev[0], pos_prev[1], pos_prev[2],
-                pos_curr[0], pos_curr[1], pos_curr[2],
-                r_prev, r_curr, chi_prev, chi_curr);
-      }
-    }
-  }
-  fclose(fd);
+  int li = ig - (int)MyGrids[0].GSstart[_x_];
+  int lj = jg - (int)MyGrids[0].GSstart[_y_];
+  int lk = kg - (int)MyGrids[0].GSstart[_z_];
+  if (li < 0 || lj < 0 || lk < 0 || li >= (int)MyGrids[0].GSlocal[_x_] || lj >= (int)MyGrids[0].GSlocal[_y_] || lk >= (int)MyGrids[0].GSlocal[_z_])
+    return 0;
+  unsigned int idx = COORD_TO_INDEX(li, lj, lk, MyGrids[0].GSlocal);
+  return products[idx].group_ID;
 }
-
-/* (removed) angular/radial helper functions: unused with user-based crossing criterion */
+#endif
 
 /* Determine if particle changed sign (outside->inside) between previous & current displacement states for a replication.
    Inputs are Eulerian displacements already (prev & curr) relative to q (Lagrangian) plus replication shift via rep indices. */
@@ -1343,18 +1402,44 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
 #if defined(MASS_MAPS_FILTER_UNCOLLAPSED)
 #if defined(SNAPSHOT)
   {
-    static int zacc_distributed_once = 0;
-    if (!zacc_distributed_once)
+    /* Do back-distribution at EACH segment, as fragmentation updates across segments
+       can assign new halo memberships and zacc values. This ensures the filter and
+       matching diagnostics see up-to-date products[].zacc and products[].group_ID. */
+    if (!ThisTask && internal.verbose_level >= VDBG)
+      printf("[%s] MASS_MAPS(filter): distributing ZACC/group_ID to products for segment %d\n", fdate(), segment_index);
+    int rc = distribute_back();
+    if (rc && !ThisTask)
     {
-      if (!ThisTask && internal.verbose_level >= VDIAG)
-        printf("[%s] MASS_MAPS(filter): distributing ZACC to products (one-time)\n", fdate());
-      int rc = distribute_back();
-      if (rc && !ThisTask)
-      {
-        fprintf(stderr, "[%s] MASS_MAPS(filter) WARNING: distribute_back() failed; ZACC may be unset (=-1) and the filter will include all.\n", fdate());
-      }
-      zacc_distributed_once = 1;
+      fprintf(stderr, "[%s] MASS_MAPS(filter) WARNING: distribute_back() failed; ZACC may be unset (=-1) and the filter will include all.\n", fdate());
     }
+#ifdef MASS_MAPS_MATCH_DIAG
+    /* After back-distribution, estimate coverage of group_ID and zacc on this task */
+    unsigned long long gid_pos_local = 0ULL, zacc_set_local = 0ULL;
+    unsigned long long gid_pos_global = 0ULL, zacc_set_global = 0ULL;
+    int nx = (int)MyGrids[0].GSlocal[_x_];
+    int ny = (int)MyGrids[0].GSlocal[_y_];
+    int nz = (int)MyGrids[0].GSlocal[_z_];
+    for (int li = 0; li < nx; ++li)
+      for (int lj = 0; lj < ny; ++lj)
+        for (int lk = 0; lk < nz; ++lk)
+        {
+          unsigned int idx = COORD_TO_INDEX(li, lj, lk, MyGrids[0].GSlocal);
+          if (products[idx].group_ID > FILAMENT)
+            gid_pos_local++;
+          if (products[idx].zacc > -0.5)
+            zacc_set_local++;
+        }
+    MPI_Reduce(&gid_pos_local, &gid_pos_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&zacc_set_local, &zacc_set_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    if (!ThisTask && internal.verbose_level >= VDBG)
+    {
+      unsigned long long total_local_size = (unsigned long long)MyGrids[0].GSglobal[_x_] * (unsigned long long)MyGrids[0].GSglobal[_y_] * (unsigned long long)MyGrids[0].GSglobal[_z_];
+      double f_gid = (total_local_size > 0ULL) ? ((double)gid_pos_global / (double)total_local_size) : 0.0;
+      double f_zacc = (total_local_size > 0ULL) ? ((double)zacc_set_global / (double)total_local_size) : 0.0;
+      printf("[%s] MASS_MAPS(match): products coverage after back-distribution: frac(group_ID>FILAMENT)=%.3f frac(zacc_set)=%.3f\n",
+             fdate(), f_gid, f_zacc);
+    }
+#endif
   }
 #else
 #error "MASS_MAPS_FILTER_UNCOLLAPSED requires SNAPSHOT"
@@ -1370,8 +1455,8 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
       hpix_init_done = 1;
     }
   }
-  /* One-time units diagnostic to stdout */
-  if (!ThisTask && internal.verbose_level >= VDIAG)
+  /* One-time units diagnostic to stdout (debug-level) */
+  if (!ThisTask && internal.verbose_level >= VDBG)
   {
     static int printed_units = 0;
     if (!printed_units)
@@ -1388,17 +1473,6 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
     }
   }
 
-  /* Products-based per-segment positions dump: write once per segment (only at high verbosity) */
-  if (internal.verbose_level >= VDIAG)
-  {
-    static int last_dumped_seg = -1;
-    if (segment_index >= 1 && segment_index != last_dumped_seg)
-    {
-      mass_maps_dump_positions_products_for_segment(segment_index);
-      last_dumped_seg = segment_index;
-    }
-  }
-
   if (NMassSheets <= 0 || params.MassMapNSIDE <= 0)
     return; /* feature disabled or not initialized */
   if (is_first_segment)
@@ -1407,7 +1481,7 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
   /* STEP 1: select replication candidates overlapping this segment radial span */
   mass_maps_select_segment_replications(segment_index);
 
-  if (!ThisTask && internal.verbose_level >= VDIAG)
+  if (!ThisTask && internal.verbose_level >= VDBG)
   {
     int show = MassMapSegmentReplicationCount < 10 ? MassMapSegmentReplicationCount : 10;
     printf("[%s] MASS_MAPS: segment %d z=%g replication candidates %d/%d :",
@@ -1462,6 +1536,15 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
   double zacc_min_global = 0.0, zacc_max_global = 0.0;
   unsigned long long zplc_out_of_segment_local = 0ULL;
   unsigned long long zplc_out_of_segment_global = 0ULL;
+#ifdef MASS_MAPS_MATCH_DIAG
+  /* Matching diagnostics */
+  unsigned long long excl_with_group_local = 0ULL;
+  unsigned long long excl_with_plcgroup_local = 0ULL;
+  unsigned long long cons_with_plcgroup_local = 0ULL;
+  unsigned long long excl_with_group_global = 0ULL;
+  unsigned long long excl_with_plcgroup_global = 0ULL;
+  unsigned long long cons_with_plcgroup_global = 0ULL;
+#endif
 #endif
   /* Store local per-rep counts to reduce in one shot */
   unsigned long long *rep_crossings_local = NULL;
@@ -1961,6 +2044,13 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                       double z_plc = InverseComovingDistance(r_entry);
 #ifdef SNAPSHOT
                       double z_acc = mass_maps_get_zacc_global(ig, jg, kg);
+#ifdef MASS_MAPS_MATCH_DIAG
+                      int gid = mass_maps_get_group_id_global(ig, jg, kg);
+                      if (gid > 0 && mass_maps_group_in_plc_by_id(gid))
+                      {
+                        cons_with_plcgroup_local++;
+                      }
+#endif
 #ifdef _OPENMP
 #pragma omp atomic update
 #endif
@@ -1998,6 +2088,14 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
 #pragma omp atomic update
 #endif
                         zfilter_excluded_local++;
+#ifdef MASS_MAPS_MATCH_DIAG
+                        if (gid > 0)
+                        {
+                          excl_with_group_local++;
+                          if (mass_maps_group_in_plc_by_id(gid))
+                            excl_with_plcgroup_local++;
+                        }
+#endif
                         continue;
                       }
 #else
@@ -2092,7 +2190,7 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
         }
 
     /* Print diagnostics on block visitation */
-    if (!ThisTask && internal.verbose_level >= VDIAG)
+    if (!ThisTask && internal.verbose_level >= VDBG)
     {
       double init_pct = (blocks_total > 0) ? (100.0 * (double)blocks_init_count / (double)blocks_total) : 0.0;
       double visit_pct = (blocks_total > 0) ? (100.0 * (double)blocks_visited / (double)blocks_total) : 0.0;
@@ -2156,6 +2254,17 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
               double z_plc = InverseComovingDistance(r_entry);
 #ifdef SNAPSHOT
               double z_acc = mass_maps_get_zacc_global(ig, jg, kg);
+#ifdef MASS_MAPS_MATCH_DIAG
+              int gid = mass_maps_get_group_id_global(ig, jg, kg);
+              if (gid > 0 && mass_maps_group_in_plc_by_id(gid))
+              {
+                /* Count considered entries whose group is present in PLC */
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                cons_with_plcgroup_local++;
+              }
+#endif
 #ifdef _OPENMP
 #pragma omp atomic update
 #endif
@@ -2193,6 +2302,22 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
 #pragma omp atomic update
 #endif
                 zfilter_excluded_local++;
+#ifdef MASS_MAPS_MATCH_DIAG
+                if (gid > 0)
+                {
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                  excl_with_group_local++;
+                  if (mass_maps_group_in_plc_by_id(gid))
+                  {
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                    excl_with_plcgroup_local++;
+                  }
+                }
+#endif
                 continue;
               }
 #else
@@ -2229,7 +2354,7 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
         if (local_max > disp_max_local)
           disp_max_local = local_max;
       }
-      if (!ThisTask && internal.verbose_level >= VDIAG)
+      if (!ThisTask && internal.verbose_level >= VDBG)
       {
         printf("[%s] MASS_MAPS(products): segment %d rep %d local entries %llu\n", fdate(), segment_index, rep_id, rep_crossings);
       }
@@ -2260,7 +2385,7 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
     MPI_Reduce(&local_total, &total_crossings_all_reps_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
   }
 
-  if (!ThisTask && internal.verbose_level >= VDIAG)
+  if (!ThisTask && internal.verbose_level >= VDBG)
   {
     printf("[%s] MASS_MAPS(products): segment %d total local entries across %d reps: %llu\n",
            fdate(), segment_index, MassMapSegmentReplicationCount, total_crossings_all_reps);
@@ -2278,7 +2403,12 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
   MPI_Reduce(&zacc_min_local, &zacc_min_global, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
   MPI_Reduce(&zacc_max_local, &zacc_max_global, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
   MPI_Reduce(&zplc_out_of_segment_local, &zplc_out_of_segment_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
-  if (!ThisTask)
+#ifdef MASS_MAPS_MATCH_DIAG
+  MPI_Reduce(&excl_with_group_local, &excl_with_group_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+  MPI_Reduce(&excl_with_plcgroup_local, &excl_with_plcgroup_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+  MPI_Reduce(&cons_with_plcgroup_local, &cons_with_plcgroup_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+#endif
+  if (!ThisTask && internal.verbose_level >= VDIAG)
   {
     unsigned long long zf_included = (zfilter_considered_global >= zfilter_excluded_global)
                                          ? (zfilter_considered_global - zfilter_excluded_global)
@@ -2286,16 +2416,42 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
     double frac_excl = (zfilter_considered_global > 0ULL)
                            ? ((double)zfilter_excluded_global / (double)zfilter_considered_global)
                            : 0.0;
+    /* Stash diagnostics for FITS header metadata */
+    g_massmaps_filter_diag.considered = (long long)zfilter_considered_global;
+    g_massmaps_filter_diag.excluded = (long long)zfilter_excluded_global;
+    g_massmaps_filter_diag.included = (long long)zf_included;
+    g_massmaps_filter_diag.frac_excluded = frac_excl;
+    g_massmaps_filter_diag.zplc_min = zplc_min_global;
+    g_massmaps_filter_diag.zplc_max = zplc_max_global;
+    g_massmaps_filter_diag.zacc_min = zacc_min_global;
+    g_massmaps_filter_diag.zacc_max = zacc_max_global;
+    g_massmaps_filter_diag.zplc_out_of_segment = (long long)zplc_out_of_segment_global;
+    g_massmaps_filter_diag.segment_index = segment_index - 1; /* map index s_map below */
+    g_massmaps_filter_diag.present = 1;
     printf("[%s] MASS_MAPS(filter): segment %d considered=%llu excluded=%llu (%.2f%%) included=%llu (%.2f%%)\n",
            fdate(), segment_index,
            zfilter_considered_global,
            zfilter_excluded_global, 100.0 * frac_excl,
            zf_included, 100.0 * (1.0 - frac_excl));
-    printf("[%s] MASS_MAPS(filter-diag): seg %d z_plc[min,max]=[%.6g, %.6g]  z_acc[min,max]=[%.6g, %.6g]  z_plc_out_of_seg=%llu\n",
-           fdate(), segment_index,
-           zplc_min_global, zplc_max_global,
-           zacc_min_global, zacc_max_global,
-           zplc_out_of_segment_global);
+    if (internal.verbose_level >= VDBG)
+      printf("[%s] MASS_MAPS(filter-diag): seg %d z_plc[min,max]=[%.6g, %.6g]  z_acc[min,max]=[%.6g, %.6g]  z_plc_out_of_seg=%llu\n",
+             fdate(), segment_index,
+             zplc_min_global, zplc_max_global,
+             zacc_min_global, zacc_max_global,
+             zplc_out_of_segment_global);
+#ifdef MASS_MAPS_MATCH_DIAG
+    if (internal.verbose_level >= VDBG && zfilter_considered_global > 0ULL)
+    {
+      double frac_cons_plc = (double)cons_with_plcgroup_global / (double)zfilter_considered_global;
+      double frac_excl_grp = (double)excl_with_group_global / (double)zfilter_excluded_global;
+      double frac_excl_plc = (double)excl_with_plcgroup_global / (double)zfilter_excluded_global;
+      printf("[%s] MASS_MAPS(match): seg %d considered_with_plcgroup=%llu (%.2f%% of considered)  excluded_with_group=%llu (%.2f%% of excluded)  excluded_with_plcgroup=%llu (%.2f%% of excluded)\n",
+             fdate(), segment_index,
+             cons_with_plcgroup_global, 100.0 * frac_cons_plc,
+             excl_with_group_global, 100.0 * frac_excl_grp,
+             excl_with_plcgroup_global, 100.0 * frac_excl_plc);
+    }
+#endif
   }
 #endif
 
@@ -2310,8 +2466,9 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
     if (!ThisTask)
     {
       double frac = (disp_total_global > 0ULL) ? ((double)disp_exceed_global / (double)disp_total_global) : 0.0;
-      printf("[%s] MASS_MAPS buffer-diag: last segment displacement vs fixed buffer=%.6g: total=%llu exceed=%llu (%.3f%%) max=%.6g\n",
-             fdate(), disp_fixed_phys, disp_total_global, disp_exceed_global, 100.0 * frac, disp_max_global);
+      if (internal.verbose_level >= VDBG)
+        printf("[%s] MASS_MAPS buffer-diag: last segment displacement vs fixed buffer=%.6g: total=%llu exceed=%llu (%.3f%%) max=%.6g\n",
+               fdate(), disp_fixed_phys, disp_total_global, disp_exceed_global, 100.0 * frac, disp_max_global);
       if (disp_total_global > 0ULL && frac >= warn_frac)
       {
         fprintf(stderr, "[%s] MASS_MAPS WARNING: %.2f%% of particles exceeded MASS_MAPS_DISP_BUFFER_FIXED_PHYS=%.6g. Consider increasing the buffer (warn threshold=%.2f%%).\n",
@@ -2345,7 +2502,9 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
         memcpy(map_local, MassMapReduceBuffer, sizeof(double) * (size_t)MassMapNPIX);
         /* Write to FITS */
         mass_maps_write_segment_map(s_map);
-        if (internal.verbose_level >= VDIAG)
+        /* Clear saved filter diagnostics once written for this segment */
+        g_massmaps_filter_diag.present = 0;
+        if (internal.verbose_level >= VDBG)
         {
           double sum, vmin, vmax;
           long nnz;

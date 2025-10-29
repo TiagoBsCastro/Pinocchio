@@ -597,11 +597,6 @@ int write_LPT_snapshot(void);
 int write_timeless_snapshot(void);
 #endif
 
-/* prototypes in write_snapshot.c */
-#ifdef MASS_MAPS
-int write_mass_maps(double, double);
-#endif
-
 /* prototypes for functions defined in cosmo.c */
 int initialize_cosmology();
 int initialize_MassVariance();
