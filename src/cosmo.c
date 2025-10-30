@@ -2044,12 +2044,12 @@ double InverseComovingDistance(double chi)
           ACCEL_INVCOMVDIST = gsl_interp_accel_alloc();
           gsl_spline_init(SPLINE_INVCOMVDIST, xchi_use, alog_use, n_use);
 
-          if (!ThisTask)
+          if (!ThisTask && internal.verbose_level >= VDBG)
           {
-            fprintf(stdout,
-                    "COSMO: Built %s inverse chi->z over [%.6g, %.6g] Mpc with %d nodes (PLC z [%.6g, %.6g], dz_buf=%.3g)\n",
-                    (use_full || alloc_n == n) ? "full" : "tailored",
-                    xchi_use[0], xchi_use[n_use - 1], n_use, z_lo, z_hi, dz_buf);
+              fprintf(stdout,
+                      "COSMO: Built %s inverse chi->z over [%.6g, %.6g] Mpc with %d nodes (PLC z [%.6g, %.6g], dz_buf=%.3g)\n",
+                      (use_full || alloc_n == n) ? "full" : "tailored",
+                      xchi_use[0], xchi_use[n_use - 1], n_use, z_lo, z_hi, dz_buf);
             fflush(stdout);
           }
 

@@ -640,6 +640,9 @@ int read_parameter_file();
 int compute_fmax(void);
 int compute_displacements(int, int, double);
 int compute_first_derivatives(double, int, int, double *);
+/* Fast path for scale-independent growth: rescale per-particle displacement
+  fields from z_prev to z_curr instead of recomputing FFT derivatives. */
+int scale_products_displacements(double z_prev, double z_curr);
 char *fdate(void);
 int dump_products(void);
 int read_dumps(void);
