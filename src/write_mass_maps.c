@@ -1,40 +1,69 @@
 /*
- * MASS_MAPS module (products-only, per-segment PLC entries → HEALPix maps)
- * -----------------------------------------------------------------------
- * Purpose:
- *   Detect entries of mass elements into a light-cone (PLC) between adjacent
- *   fragmentation outputs and accumulate counts on per-segment HEALPix maps.
+ * MASS_MAPS: per-segment PLC entries → HEALPix maps (products-only)
+ * -----------------------------------------------------------------
+ * Purpose
+ *   Detect entries of mass elements into a past light-cone (PLC) between adjacent
+ *   fragmentation outputs and accumulate counts on one HEALPix map per segment.
  *
- * Data flow (per segment):
- *   - Build candidate replications by radial overlap with the segment chi-span.
- *   - Partition the local tile into Lagrangian blocks; for each block+replication,
- *     build a block AABB in physical units expanded by a fixed buffer
- *     (absolute and/or fraction of block half-diagonal) plus MASS_MAPS_CULL_PAD_PHYS.
- *   - Apply conservative culls before touching particles:
- *       • radial shell test via tight AABB distance bounds to the PLC center
- *       • angular aperture test via a cosine upper bound over the AABB
- *   - For passing pairs, traverse particles; test the user crossing condition
- *     H_prev = chi_prev − r_prev, H_curr = chi_curr − r_curr; on success, linearly
- *     interpolate the entry position, gate by aperture, pixelize, and accumulate.
- *   - MPI-reduce per-rep counters and the map to rank 0; write one FITS per segment.
+ * High-level flow (per segment)
+ *   1) Build candidate replications by radial overlap with the segment chi-span.
+ *   2) Optionally partition local Lagrangian tile into blocks and apply conservative
+ *      culls (radial shell + angular bound) before touching particles.
+ *   3) Traverse particles for passing block/replication pairs; detect PLC entry with
+ *      H = chi(z) − r sign change, interpolate entry position, gate by aperture,
+ *      pixelize, and accumulate.
+ *   4) MPI-reduce per-rep counters and maps; write one FITS per segment.
  *
- * Performance notes:
- *   - Lagrangian block culling prunes most work with cheap block-level radial
- *     and angular tests; replication shifts are applied only to passing blocks.
- *   - OpenMP parallelizes over blocks; optional per-thread HEALPix accumulators
- *     reduce atomic contention on the global map.
+ * Requirements and interplay with other modules
+ *   - Requires: PLC, RECOMPUTE_DISPLACEMENTS, HAVE_CFITSIO (enforced below).
+ *   - Uses SNAPSHOT structures when MASS_MAPS_FILTER_UNCOLLAPSED is enabled.
+ *   - Displacements between segments:
+ *       • If SCALE_DEPENDENT (or READ_PK_TABLE/MOD_GRAV_FR) is defined, derivatives are
+ *         recomputed each segment via FFTs (fragment.c → compute_displacements).
+ *       • Otherwise (scale-independent ΛCDM), per-particle displacements are rescaled
+ *         between segments using k-independent growth factors (fast path, no FFTs).
  *
- * Compile-time knobs (macros):
- *   MASS_MAPS_BLOCKS[_X|_Y|_Z]: number of Lagrangian blocks per axis (>=1)
- *   MASS_MAPS_CULL_PAD_PHYS:    padding (phys units) added to Lagrangian AABBs (phys units)
- *   MASS_MAPS_THREAD_ACCUM:     if defined, use per-thread HEALPix accumulators
- *   MASS_MAPS_DISP_BUFFER_FIXED_PHYS: if >=0, use this fixed buffer (phys units)
- *   MASS_MAPS_DISP_BUFFER_FRAC:       if >=0, per-block buffer = FRAC * (half-diagonal of block) in phys units
- *   MASS_MAPS_DISP_BUFFER_WARN_FRAC:  warn if fraction of particles with |Δx|>fixed buffer exceeds this
+ * Key runtime parameters (from parameter file)
+ *   - PLCAperture [deg]: Angular radius of the PLC cone; <180 selects a spherical cap map.
+ *   - PLC axis/center: Provided by PLC setup; used for pixelization basis and origin.
  *
- * Accuracy contract:
- *   All refactors preserve the user-specified crossing criterion and output
- *   accumulation semantics. Any optimization must not change results.
+ * Compile-time directives (macros) and what they control
+ *   Core feature flags
+ *     - MASS_MAPS                 Enable mass-maps module (this file).
+ *     - PLC                       Enable past-light-cone logic (required).
+ *     - RECOMPUTE_DISPLACEMENTS  Maintain prev/curr segment fields for interpolation (required).
+ *     - HAVE_CFITSIO             Enable FITS output (required).
+ *     - SNAPSHOT                 Provide product fields used by optional filters.
+ *
+ *   Optional behavior
+ *     - MASS_MAPS_FILTER_UNCOLLAPSED   Include only entries with z_plc > z_acc (requires SNAPSHOT).
+ *     - MASS_MAPS_MATCH_DIAG           Extra diagnostics to reconcile entries with PLC halo catalog.
+ *     - MASS_MAPS_FULLSKY_OUTPUT       If nonzero, also write full-sky IMAGE HDU even when aperture<180 (default 0).
+ *
+ *   Lagrangian sub-volume culling (performance)
+ *     - MASS_MAPS_BLOCKS[_X|_Y|_Z]     Number of Lagrangian blocks per axis (>=1). Default: 8 per axis.
+ *     - MASS_MAPS_VARPAD_FACTOR        Variable AABB padding factor (dimensionless). Default: 20.0.
+ *                                       Units and conversion:
+ *                                         • Model is defined in Mpc/h: pad_h = FACTOR * (sigma8/0.8)^{1.5} / (1+z)
+ *                                         • Internally we work in true Mpc (positions use InterPartDist in Mpc),
+ *                                           so we convert pad_phys = pad_h / Hubble100.
+ *                                         • For histogram/header convenience, we report both PAD_PHYS(Mpc) and
+ *                                           PAD_PHYS(Mpc/h), and also PAD_CELLS = PAD_PHYS(Mpc)/InterPartDist(Mpc).
+ *     - MASS_MAPS_VARPAD_WARN_FRAC     Warn on last segment if |x(q,z)-q| exceeds pad for more than this fraction. Default: 0.05.
+
+ *
+ *   Threading and parallelism
+ *     - MASS_MAPS_THREAD_ACCUM       Use per-thread HEALPix accumulators and merge at the end to reduce atomics.
+ *     - USE_FFT_THREADS              Enable FFTW threading for FFT phases (independent of mass-maps loops).
+ *
+ * Output and diagnostics
+ *   - For partial-sky (aperture<180), a RING-ordered spherical cap with Ncap pixels is produced.
+ *     If the computed Ncap is 0 (too small aperture for the chosen NSIDE), maps are disabled with a warning.
+ *   - FITS headers include provenance and filter stats when enabled:
+ *       FILTER='ZPLC>ZACC', ZF_CONS/ZF_EXCL/ZF_INCL/ZF_FEXCL, APERTURE, and map geometry.
+ *
+ * Accuracy contract
+ *   All refactors preserve the crossing criterion and accumulation semantics. Optimizations must not change results.
  */
 #include "pinocchio.h"
 #ifdef MASS_MAPS
@@ -53,6 +82,14 @@
 #error "MASS_MAPS requires RECOMPUTE_DISPLACEMENTS"
 #endif
 
+/* Ensure variable pad macros are available before any use (histogram header, etc.) */
+#ifndef MASS_MAPS_VARPAD_FACTOR
+#define MASS_MAPS_VARPAD_FACTOR 20.0
+#endif
+#ifndef MASS_MAPS_VARPAD_WARN_FRAC
+#define MASS_MAPS_VARPAD_WARN_FRAC (0.05)
+#endif
+
 #ifndef HAVE_CFITSIO
 #error "MASS_MAPS requires HAVE_CFITSIO"
 #endif
@@ -63,6 +100,293 @@
 #ifdef _OPENMP
 #include <omp.h>
 #endif
+
+/* ---------------------------------------------------------- */
+/* Optional displacement histogram (compile-time, default OFF) */
+/* ---------------------------------------------------------- */
+#ifdef DISP_HISTOGRAM
+#ifndef DISP_HIST_NBINS
+#define DISP_HIST_NBINS 100
+#endif
+#ifndef DISP_HIST_DMIN
+#define DISP_HIST_DMIN 0.0
+#endif
+#ifndef DISP_HIST_DMAX
+#define DISP_HIST_DMAX 100.0
+#endif
+#ifndef DISP_HIST_STRIDE
+#define DISP_HIST_STRIDE 1
+#endif
+#ifndef DISP_HIST_AT_PREV
+#define DISP_HIST_AT_PREV 1
+#endif
+#ifndef DISP_HIST_AT_CURR
+#define DISP_HIST_AT_CURR 1
+#endif
+/* Write an ASCII histogram file on rank 0 */
+static void mass_maps_disp_hist_write_file(double z_target,
+                                           const unsigned long long *hist_global,
+                                           unsigned long long underflow_global,
+                                           unsigned long long overflow_global,
+                                           unsigned long long sampled_global)
+{
+  if (ThisTask != 0)
+    return;
+  char fname[4 * LBLENGTH];
+  /* Use fixed-width z formatting for stable filenames */
+  /* Preferred naming: pinocchio.<z>.<RunFlag>.disp_hist.out, with z formatted to 4 decimals */
+  snprintf(fname, sizeof(fname), "pinocchio.%.4f.%s.disp_hist.out", z_target, params.RunFlag);
+  FILE *fd = fopen(fname, "w");
+  if (!fd)
+  {
+    fprintf(stderr, "Task 0 ERROR: cannot open %s for writing.\n", fname);
+    return;
+  }
+  double dmin = (double)DISP_HIST_DMIN;
+  double dmax = (double)DISP_HIST_DMAX;
+  int nb = (int)DISP_HIST_NBINS;
+  int stride = (int)DISP_HIST_STRIDE;
+  /* Compute variable pad at this redshift for clarity in header */
+  double sigma8 = params.Sigma8;
+  double factor = MASS_MAPS_VARPAD_FACTOR;
+  double res = params.InterPartDist; /* true Mpc */
+  double h = params.Hubble100;
+  /* Model pad in Mpc/h, then convert to true Mpc and cells */
+  double pad_phys_h = factor * pow(sigma8 / 0.8, 1.5) / (1.0 + z_target); /* Mpc/h */
+  double pad_phys = (h > 0.0) ? (pad_phys_h / h) : pad_phys_h;            /* true Mpc */
+  double pad_cells = (res > 0.0) ? (pad_phys / res) : 0.0;                /* dimensionless */
+  /* Header */
+  fprintf(fd, "# Displacement histogram |x(q,z)-q| in InterPartDist (Mpc) units\n");
+  fprintf(fd, "# z=%.8f NBINS=%d DMIN=%.6g DMAX=%.6g SPACING=linear STRIDE=%d\n", z_target, nb, dmin, dmax, stride);
+  fprintf(fd, "# GRID=(%d,%d,%d) InterPartDist(Mpc)=%.9g LPT_ORDER=%d MPI_TASKS=%d RUN=%s\n",
+          (int)MyGrids[0].GSglobal[_x_], (int)MyGrids[0].GSglobal[_y_], (int)MyGrids[0].GSglobal[_z_],
+          params.InterPartDist,
+#ifdef THREE_LPT
+          3,
+#else
+#ifdef TWO_LPT
+          2,
+#else
+          1,
+#endif
+#endif
+          NTasks, params.RunFlag);
+  fprintf(fd, "# VARPAD: FACTOR=%.6g SIGMA8=%.6g PAD_PHYS(Mpc)=%.9g PAD_PHYS(Mpc/h)=%.9g PAD_CELLS=%.9g\n",
+          factor, sigma8, pad_phys, pad_phys_h, pad_cells);
+  fprintf(fd, "# SAMPLED_GLOBAL=%llu UNDERFLOW=%llu OVERFLOW=%llu\n",
+          (unsigned long long)sampled_global,
+          (unsigned long long)underflow_global,
+          (unsigned long long)overflow_global);
+  fprintf(fd, "# Columns: bin_lo bin_hi count fraction cum_fraction\n");
+
+  double width = (nb > 0) ? ((dmax - dmin) / (double)nb) : 0.0;
+  unsigned long long cum = 0ULL;
+  for (int b = 0; b < nb; ++b)
+  {
+    double blo = dmin + width * (double)b;
+    double bhi = blo + width;
+    unsigned long long c = hist_global[b];
+    cum += c;
+    double frac = (sampled_global > 0ULL) ? ((double)c / (double)sampled_global) : 0.0;
+    double cfrac = (sampled_global > 0ULL) ? ((double)cum / (double)sampled_global) : 0.0;
+    fprintf(fd, "%.9g %.9g %llu %.9g %.9g\n", blo, bhi, (unsigned long long)c, frac, cfrac);
+  }
+  fclose(fd);
+  if (internal.verbose_level >= VDIAG)
+  {
+    printf("[%s] DISP_HIST: wrote %s (z=%.6f nbins=%d sampled=%llu uf=%llu of=%llu)\n",
+           fdate(), fname, z_target, nb,
+           (unsigned long long)sampled_global,
+           (unsigned long long)underflow_global,
+           (unsigned long long)overflow_global);
+  }
+}
+
+/* Accumulate histogram for a single endpoint selector: 0=prev, 1=curr */
+static void mass_maps_disp_hist_accumulate_endpoint(int use_curr,
+                                                    unsigned long long *hist_local,
+                                                    unsigned long long *underflow_local,
+                                                    unsigned long long *overflow_local,
+                                                    unsigned long long *sampled_local)
+{
+  const int nb = (int)DISP_HIST_NBINS;
+  const double dmin = (double)DISP_HIST_DMIN;
+  const double dmax = (double)DISP_HIST_DMAX;
+  const int stride = (int)DISP_HIST_STRIDE;
+  if (nb <= 0 || dmax <= dmin)
+    return;
+  int nx = (int)MyGrids[0].GSlocal[_x_];
+  int ny = (int)MyGrids[0].GSlocal[_y_];
+  int nz = (int)MyGrids[0].GSlocal[_z_];
+  int gx0 = (int)MyGrids[0].GSstart[_x_];
+  int gy0 = (int)MyGrids[0].GSstart[_y_];
+  int gz0 = (int)MyGrids[0].GSstart[_z_];
+  double invw = (double)nb / (dmax - dmin);
+
+  unsigned long long uf = 0ULL, of = 0ULL, tot = 0ULL;
+
+#ifdef _OPENMP
+  int nthreads = omp_get_max_threads();
+#else
+  int nthreads = 1;
+#endif
+  unsigned long long *thread_hist = (unsigned long long *)calloc((size_t)nthreads * (size_t)nb, sizeof(unsigned long long));
+  if (!thread_hist)
+    return;
+
+  /* Parallel over local tile */
+#ifdef _OPENMP
+#pragma omp parallel
+#endif
+  {
+#ifdef _OPENMP
+    int tid = omp_get_thread_num();
+#else
+    int tid = 0;
+#endif
+    unsigned long long *h = thread_hist + (size_t)tid * (size_t)nb;
+
+#ifdef _OPENMP
+#pragma omp for collapse(3) schedule(static) reduction(+ : uf, of, tot)
+#endif
+    for (int li = 0; li < nx; ++li)
+      for (int lj = 0; lj < ny; ++lj)
+        for (int lk = 0; lk < nz; ++lk)
+        {
+          if (stride > 1)
+          {
+            int gi = gx0 + li, gj = gy0 + lj, gk = gz0 + lk;
+            /* Simple deterministic sub-sampling */
+            if (((gi + gj + gk) % stride) != 0)
+              continue;
+          }
+          unsigned int idx = COORD_TO_INDEX(li, lj, lk, MyGrids[0].GSlocal);
+          /* Build displacement vector in grid units (InterPartDist units) */
+          double vx = 0.0, vy = 0.0, vz = 0.0;
+          if (use_curr)
+          {
+            vx = products[idx].Vel[0];
+            vy = products[idx].Vel[1];
+            vz = products[idx].Vel[2];
+#ifdef TWO_LPT
+            vx += products[idx].Vel_2LPT[0];
+            vy += products[idx].Vel_2LPT[1];
+            vz += products[idx].Vel_2LPT[2];
+#ifdef THREE_LPT
+            vx += products[idx].Vel_3LPT_1[0] + products[idx].Vel_3LPT_2[0];
+            vy += products[idx].Vel_3LPT_1[1] + products[idx].Vel_3LPT_2[1];
+            vz += products[idx].Vel_3LPT_1[2] + products[idx].Vel_3LPT_2[2];
+#endif
+#endif
+          }
+          else
+          {
+            vx = products[idx].Vel_prev[0];
+            vy = products[idx].Vel_prev[1];
+            vz = products[idx].Vel_prev[2];
+#ifdef TWO_LPT
+            vx += products[idx].Vel_2LPT_prev[0];
+            vy += products[idx].Vel_2LPT_prev[1];
+            vz += products[idx].Vel_2LPT_prev[2];
+#ifdef THREE_LPT
+            vx += products[idx].Vel_3LPT_1_prev[0] + products[idx].Vel_3LPT_2_prev[0];
+            vy += products[idx].Vel_3LPT_1_prev[1] + products[idx].Vel_3LPT_2_prev[1];
+            vz += products[idx].Vel_3LPT_1_prev[2] + products[idx].Vel_3LPT_2_prev[2];
+#endif
+#endif
+          }
+          double d = sqrt(vx * vx + vy * vy + vz * vz); /* in InterPartDist units */
+          ++tot;
+          if (d < dmin)
+          {
+            ++uf;
+            continue;
+          }
+          if (!(d < dmax))
+          {
+            ++of;
+            continue;
+          }
+          int bin = (int)floor((d - dmin) * invw);
+          if (bin < 0)
+            bin = 0;
+          if (bin >= nb)
+            bin = nb - 1;
+          h[bin]++;
+        }
+  }
+
+  /* Reduce thread hist to task hist */
+  for (int t = 0; t < nthreads; ++t)
+  {
+    unsigned long long *h = thread_hist + (size_t)t * (size_t)nb;
+    for (int b = 0; b < nb; ++b)
+      hist_local[b] += h[b];
+  }
+  free(thread_hist);
+  *underflow_local += uf;
+  *overflow_local += of;
+  *sampled_local += tot;
+}
+
+/* Orchestrator entry: accumulate and write histograms for prev/curr endpoints */
+static void mass_maps_disp_hist_on_segment(int segment_index, double z_prev, double z_curr)
+{
+  (void)segment_index;
+  const int nb = (int)DISP_HIST_NBINS;
+  if (nb <= 0 || DISP_HIST_DMAX <= DISP_HIST_DMIN)
+    return;
+
+  /* Common local buffers */
+  unsigned long long *hist_prev_local = NULL, *hist_curr_local = NULL;
+  unsigned long long uf_prev_local = 0ULL, of_prev_local = 0ULL, tot_prev_local = 0ULL;
+  unsigned long long uf_curr_local = 0ULL, of_curr_local = 0ULL, tot_curr_local = 0ULL;
+
+  if (DISP_HIST_AT_PREV)
+    hist_prev_local = (unsigned long long *)calloc((size_t)nb, sizeof(unsigned long long));
+  if (DISP_HIST_AT_CURR)
+    hist_curr_local = (unsigned long long *)calloc((size_t)nb, sizeof(unsigned long long));
+
+  if (hist_prev_local)
+    mass_maps_disp_hist_accumulate_endpoint(0, hist_prev_local, &uf_prev_local, &of_prev_local, &tot_prev_local);
+  if (hist_curr_local)
+    mass_maps_disp_hist_accumulate_endpoint(1, hist_curr_local, &uf_curr_local, &of_curr_local, &tot_curr_local);
+
+  /* Global reductions and writes */
+  if (hist_prev_local)
+  {
+    unsigned long long *hist_prev_global = NULL;
+    if (!ThisTask)
+      hist_prev_global = (unsigned long long *)calloc((size_t)nb, sizeof(unsigned long long));
+    MPI_Reduce(hist_prev_local, (!ThisTask ? hist_prev_global : NULL), nb, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    unsigned long long uf_prev_global = 0ULL, of_prev_global = 0ULL, tot_prev_global = 0ULL;
+    MPI_Reduce(&uf_prev_local, &uf_prev_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&of_prev_local, &of_prev_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&tot_prev_local, &tot_prev_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    mass_maps_disp_hist_write_file(z_prev, hist_prev_global, uf_prev_global, of_prev_global, tot_prev_global);
+    if (!ThisTask && hist_prev_global)
+      free(hist_prev_global);
+  }
+  if (hist_curr_local)
+  {
+    unsigned long long *hist_curr_global = NULL;
+    if (!ThisTask)
+      hist_curr_global = (unsigned long long *)calloc((size_t)nb, sizeof(unsigned long long));
+    MPI_Reduce(hist_curr_local, (!ThisTask ? hist_curr_global : NULL), nb, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    unsigned long long uf_curr_global = 0ULL, of_curr_global = 0ULL, tot_curr_global = 0ULL;
+    MPI_Reduce(&uf_curr_local, &uf_curr_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&of_curr_local, &of_curr_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&tot_curr_local, &tot_curr_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    mass_maps_disp_hist_write_file(z_curr, hist_curr_global, uf_curr_global, of_curr_global, tot_curr_global);
+    if (!ThisTask && hist_curr_global)
+      free(hist_curr_global);
+  }
+  if (hist_prev_local)
+    free(hist_prev_local);
+  if (hist_curr_local)
+    free(hist_curr_local);
+}
+#endif /* DISP_HISTOGRAM */
 
 /* ---------------------------------------------------------- */
 /* Optional: carry ZPLC>ZACC filter diagnostics into FITS     */
@@ -211,18 +535,13 @@ static inline int mass_maps_group_in_plc_by_id(int gid)
 #ifndef MASS_MAPS_BLOCKS
 #define MASS_MAPS_BLOCKS 8
 #endif
-#ifndef MASS_MAPS_CULL_PAD_PHYS
-#define MASS_MAPS_CULL_PAD_PHYS 0.01
+/* Variable buffer factor (dimensionless), defaults to 20 as per empirical fit */
+#ifndef MASS_MAPS_VARPAD_FACTOR
+#define MASS_MAPS_VARPAD_FACTOR 20.0
 #endif
-/* Displacement buffer defaults: disabled unless specified */
-#ifndef MASS_MAPS_DISP_BUFFER_FIXED_PHYS
-#define MASS_MAPS_DISP_BUFFER_FIXED_PHYS (-1.0)
-#endif
-#ifndef MASS_MAPS_DISP_BUFFER_FRAC
-#define MASS_MAPS_DISP_BUFFER_FRAC (-1.0)
-#endif
-#ifndef MASS_MAPS_DISP_BUFFER_WARN_FRAC
-#define MASS_MAPS_DISP_BUFFER_WARN_FRAC (0.05)
+/* Last-segment diagnostics warn threshold for variable buffer */
+#ifndef MASS_MAPS_VARPAD_WARN_FRAC
+#define MASS_MAPS_VARPAD_WARN_FRAC (0.05)
 #endif
 /* Default per-axis block counts fall back to MASS_MAPS_BLOCKS if not provided */
 #ifndef MASS_MAPS_BLOCKS_X
@@ -1501,6 +1820,10 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
   /* Segment endpoint redshifts */
   double z_prev = ScaleDep.z[segment_index - 1];
   double z_curr = z_segment; /* expected to be ScaleDep.z[segment_index] */
+  /* Optional: displacement histogram at endpoints (compile-time, default OFF) */
+#ifdef DISP_HISTOGRAM
+  mass_maps_disp_hist_on_segment(segment_index, z_prev, z_curr);
+#endif
   /* Segment chi bounds */
   double chi_prev_seg = ComovingDistance(z_prev);
   double chi_curr_seg = ComovingDistance(z_curr);
@@ -1563,7 +1886,22 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
   int blocks_x = MASS_MAPS_BLOCKS_X;
   int blocks_y = MASS_MAPS_BLOCKS_Y;
   int blocks_z = MASS_MAPS_BLOCKS_Z;
-  double cull_pad = MASS_MAPS_CULL_PAD_PHYS;
+  /* Unified AABB pad (phys units, same units as InterPartDist = true Mpc):
+     Variable buffer based on (sigma8, z). We use the empirical form
+       aabb_pad_phys = FACTOR * (sigma8/0.8)^{1.5} / (1+z)
+     which is independent of resolution and in true Mpc to match positions formed by
+     multiplying lattice coordinates by InterPartDist (true Mpc).
+   */
+  double aabb_pad_phys = 0.0;
+  {
+    double sigma8 = params.Sigma8;
+    double z_now = z_curr; /* current segment redshift */
+    double factor = MASS_MAPS_VARPAD_FACTOR;
+    double h = params.Hubble100;
+    /* Model defined in Mpc/h: pad_h = factor * (sigma8/0.8)^{1.5} / (1+z).
+       Convert to true Mpc for internal positions by dividing by h. */
+    aabb_pad_phys = (factor * pow(sigma8 / 0.8, 1.5) / (1.0 + z_now)) / (h > 0.0 ? h : 1.0); /* true Mpc */
+  }
   /* Per-thread HEALPix accumulators: compile-time toggle */
 #ifdef MASS_MAPS_THREAD_ACCUM
   int thread_accum = 1;
@@ -1589,29 +1927,25 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
   int culling_enabled = (blocks_x > 0 && blocks_y > 0 && blocks_z > 0);
   if (!ThisTask && internal.verbose_level >= VDIAG)
   {
-    printf("[%s] MASS_MAPS culling: blocks=(%d,%d,%d) pad=%.3g enabled=%d (Lagrangian-only)\n",
-           fdate(), blocks_x, blocks_y, blocks_z, cull_pad, culling_enabled);
+    double pad_cells = (params.InterPartDist > 0.0) ? (aabb_pad_phys / params.InterPartDist) : 0.0;
+    printf("[%s] MASS_MAPS culling: blocks=(%d,%d,%d) aabb_pad=%.3g Mpc (%.3g cells) enabled=%d (Lagrangian-only)\n",
+           fdate(), blocks_x, blocks_y, blocks_z, aabb_pad_phys, pad_cells, culling_enabled);
   }
 
-  /* Absolute phys value and/or fraction of block size (compile-time) */
-  double disp_fixed_phys = MASS_MAPS_DISP_BUFFER_FIXED_PHYS;
-  double disp_frac = MASS_MAPS_DISP_BUFFER_FRAC;
-  /* Last-segment displacement vs fixed-buffer diagnostics threshold */
-  double warn_frac = MASS_MAPS_DISP_BUFFER_WARN_FRAC;
+  /* Last-segment displacement vs buffer diagnostics threshold */
+  double warn_frac = MASS_MAPS_VARPAD_WARN_FRAC;
   int last_segment = (segment_index == NMassSheets);
-  int collect_disp_stats = (last_segment && disp_fixed_phys > 0.0);
+  int collect_disp_stats = (last_segment && (aabb_pad_phys > 0.0));
   unsigned long long disp_total_local = 0ULL;  /* number of particles evaluated */
-  unsigned long long disp_exceed_local = 0ULL; /* number with |Pcurr-Pprev| > fixed buffer */
+  unsigned long long disp_exceed_local = 0ULL; /* number with |Pcurr-Pprev| > AABB pad */
   double disp_max_local = 0.0;                 /* maximum |Pcurr-Pprev| observed */
   if (!ThisTask && internal.verbose_level >= VDIAG)
   {
-    if (disp_fixed_phys >= 0.0)
-      printf("[%s] MASS_MAPS culling: using fixed buffer phys=%.6g\n", fdate(), disp_fixed_phys);
-    if (disp_frac >= 0.0)
-      printf("[%s] MASS_MAPS culling: using fractional buffer frac=%.6g of block half-diagonal\n", fdate(), disp_frac);
+    if (aabb_pad_phys > 0.0)
+      printf("[%s] MASS_MAPS culling: using unified AABB pad phys=%.6g\n", fdate(), aabb_pad_phys);
     if (collect_disp_stats)
-      printf("[%s] MASS_MAPS buffer-diag: last segment will collect displacement stats vs fixed buffer phys=%.6g (warn frac=%.3g)\n",
-             fdate(), disp_fixed_phys, warn_frac);
+      printf("[%s] MASS_MAPS buffer-diag: last segment will collect |x(q,z)-q| stats vs buffer pad=%.6g Mpc (%.6g cells) (warn frac=%.3g)\n",
+             fdate(), aabb_pad_phys, (aabb_pad_phys / params.InterPartDist), warn_frac);
   }
   /* Build block edge indices in local coordinates (inclusive ranges per block) */
   int *edge_x = NULL, *edge_y = NULL, *edge_z = NULL;
@@ -1713,29 +2047,22 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
 #endif
           blocks_init_count++;
 
+          /* Per-block buffer threshold for diagnostics */
+          double scale_block = params.InterPartDist;
+          double thresh_block = aabb_pad_phys;
+
           /* Build replication pass list for this block */
           int *rep_pass = (int *)alloca(sizeof(int) * (size_t)MassMapSegmentReplicationCount);
           int pass_n = 0;
           for (int ir = 0; ir < MassMapSegmentReplicationCount; ++ir)
           {
             const double *shift = &RepShift[3 * ir];
-            /* Lagrangian AABB expanded by fixed buffer and pad (phys units) */
-            double scale = params.InterPartDist;
-            double min_s[3] = {(ig0 + SHIFT) * scale, (jg0 + SHIFT) * scale, (kg0 + SHIFT) * scale};
-            double max_s[3] = {(ig1 + SHIFT) * scale, (jg1 + SHIFT) * scale, (kg1 + SHIFT) * scale};
-            /* Compute per-block buffer: fixed phys plus optional fraction of half-diagonal */
-            double buf_phys = 0.0;
-            if (disp_fixed_phys >= 0.0)
-              buf_phys += disp_fixed_phys;
-            if (disp_frac >= 0.0)
-            {
-              double dx = (ig1 - ig0 + 1) * scale * 0.5;
-              double dy = (jg1 - jg0 + 1) * scale * 0.5;
-              double dz = (kg1 - kg0 + 1) * scale * 0.5;
-              double half_diag = sqrt(dx * dx + dy * dy + dz * dz);
-              buf_phys += disp_frac * half_diag;
-            }
-            double pad_total = buf_phys + cull_pad;
+            /* Lagrangian AABB expanded by unified pad (phys units) */
+            double min_s[3] = {(ig0 + SHIFT) * scale_block, (jg0 + SHIFT) * scale_block, (kg0 + SHIFT) * scale_block};
+            double max_s[3] = {(ig1 + SHIFT) * scale_block, (jg1 + SHIFT) * scale_block, (kg1 + SHIFT) * scale_block};
+            /* Effective AABB padding (variable): use per-segment aabb_pad_phys only */
+            double thresh_block = aabb_pad_phys;
+            double pad_total = aabb_pad_phys;
             for (int a = 0; a < 3; ++a)
             {
               min_s[a] -= pad_total;
@@ -1833,12 +2160,16 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                   PosCurrBuf[3 * idx + 2] = pcurr[2];
                   if (collect_disp_stats)
                   {
-                    double dx = pcurr[0] - pprev[0];
-                    double dy = pcurr[1] - pprev[1];
-                    double dz = pcurr[2] - pprev[2];
+                    /* Displacement relative to Lagrangian position q */
+                    double qx = (ig + SHIFT) * scale_block;
+                    double qy = (jg + SHIFT) * scale_block;
+                    double qz = (kg + SHIFT) * scale_block;
+                    double dx = pcurr[0] - qx;
+                    double dy = pcurr[1] - qy;
+                    double dz = pcurr[2] - qz;
                     double d = sqrt(dx * dx + dy * dy + dz * dz);
                     blk_total++;
-                    if (d > disp_fixed_phys)
+                    if (d > thresh_block)
                       blk_exceed++;
                     if (d > blk_max)
                       blk_max = d;
@@ -2017,12 +2348,15 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                     mass_maps_compute_prev_curr_positions(&obj, pos_prev, pos_curr, lpt_order);
                     if (collect_disp_stats && ip == 0)
                     {
-                      double dx = pos_curr[0] - pos_prev[0];
-                      double dy = pos_curr[1] - pos_prev[1];
-                      double dz = pos_curr[2] - pos_prev[2];
+                      double qx = (ig + SHIFT) * scale_block;
+                      double qy = (jg + SHIFT) * scale_block;
+                      double qz = (kg + SHIFT) * scale_block;
+                      double dx = pos_curr[0] - qx;
+                      double dy = pos_curr[1] - qy;
+                      double dz = pos_curr[2] - qz;
                       double d = sqrt(dx * dx + dy * dy + dz * dz);
                       blk_total++;
-                      if (d > disp_fixed_phys)
+                      if (d > thresh_block)
                         blk_exceed++;
                       if (d > blk_max)
                         blk_max = d;
@@ -2211,6 +2545,8 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                          RepShift ? RepShift[3 * ir + 2] : 0.0};
       unsigned long long local_total = 0ULL, local_exceed = 0ULL;
       double local_max = 0.0;
+      /* Buffer for fallback path: treat the whole local tile as one block (variable pad only) */
+      double thresh_fallback = aabb_pad_phys;
 #ifdef _OPENMP
 #pragma omp parallel for collapse(3) schedule(static) reduction(+ : rep_crossings, local_total, local_exceed) reduction(max : local_max)
 #endif
@@ -2228,12 +2564,15 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
             mass_maps_compute_prev_curr_positions(&obj, pos_prev, pos_curr, lpt_order);
             if (collect_disp_stats && ir == 0)
             {
-              double dx = pos_curr[0] - pos_prev[0];
-              double dy = pos_curr[1] - pos_prev[1];
-              double dz = pos_curr[2] - pos_prev[2];
+              double qx = (ig + SHIFT) * params.InterPartDist;
+              double qy = (jg + SHIFT) * params.InterPartDist;
+              double qz = (kg + SHIFT) * params.InterPartDist;
+              double dx = pos_curr[0] - qx;
+              double dy = pos_curr[1] - qy;
+              double dz = pos_curr[2] - qz;
               double d = sqrt(dx * dx + dy * dy + dz * dz);
               local_total++;
-              if (d > disp_fixed_phys)
+              if (d > thresh_fallback)
                 local_exceed++;
               if (d > local_max)
                 local_max = d;
@@ -2455,7 +2794,7 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
   }
 #endif
 
-  /* Report last-segment displacement vs fixed-buffer stats */
+  /* Report last-segment displacement vs buffer stats */
   if (collect_disp_stats)
   {
     unsigned long long disp_total_global = 0ULL, disp_exceed_global = 0ULL;
@@ -2467,12 +2806,14 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
     {
       double frac = (disp_total_global > 0ULL) ? ((double)disp_exceed_global / (double)disp_total_global) : 0.0;
       if (internal.verbose_level >= VDBG)
-        printf("[%s] MASS_MAPS buffer-diag: last segment displacement vs fixed buffer=%.6g: total=%llu exceed=%llu (%.3f%%) max=%.6g\n",
-               fdate(), disp_fixed_phys, disp_total_global, disp_exceed_global, 100.0 * frac, disp_max_global);
+        printf("[%s] MASS_MAPS buffer-diag: last segment |x(q,z)-q| vs buffer pad=%.6g Mpc (%.6g cells): total=%llu exceed=%llu (%.3f%%) max=%.6g\n",
+               fdate(), aabb_pad_phys, (aabb_pad_phys / params.InterPartDist),
+               disp_total_global, disp_exceed_global, 100.0 * frac, disp_max_global);
       if (disp_total_global > 0ULL && frac >= warn_frac)
       {
-        fprintf(stderr, "[%s] MASS_MAPS WARNING: %.2f%% of particles exceeded MASS_MAPS_DISP_BUFFER_FIXED_PHYS=%.6g. Consider increasing the buffer (warn threshold=%.2f%%).\n",
-                fdate(), 100.0 * frac, disp_fixed_phys, 100.0 * warn_frac);
+        fprintf(stderr,
+                "[%s] MASS_MAPS WARNING: %.2f%% of particles exceeded the buffer pad=%.6g Mpc (%.6g cells). Consider increasing MASS_MAPS_VARPAD_FACTOR (warn threshold=%.2f%%).\n",
+                fdate(), 100.0 * frac, aabb_pad_phys, (aabb_pad_phys / params.InterPartDist), 100.0 * warn_frac);
       }
     }
   }
