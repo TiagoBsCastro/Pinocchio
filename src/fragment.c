@@ -406,15 +406,8 @@ int fragment()
           if (shift_all_displacements())
             return 1;
 
-#if defined(SCALE_DEPENDENT) || defined(READ_PK_TABLE) || defined(MOD_GRAV_FR)
-          /* Scale-dependent growth: must recompute derivatives via FFTs */
           if (compute_displacements(0, 0, ScaleDep.z[mysegment]))
             return 1;
-#else
-          /* Scale-independent growth: reuse base derivatives, rescale fields */
-          if (scale_products_displacements(ScaleDep.z[mysegment - 1], ScaleDep.z[mysegment]))
-            return 1;
-#endif
 
           tmp = MPI_Wtime();
           if (!ThisTask)

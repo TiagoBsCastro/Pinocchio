@@ -360,60 +360,6 @@ int compute_displacements(int compute_sources, int recompute_sd, double redshift
   return 0;
 }
 
-/*
- * Fast-path displacement update for scale-independent growth.
- * Assumes RECOMPUTE_DISPLACEMENTS workflow has already shifted current->prev
- * via shift_all_displacements(); this function then updates the "current"
- * per-particle displacements by scaling from z_prev to z_curr with the
- * appropriate k-independent growth factors (1LPT, 2LPT, 3LPT components).
- */
-int scale_products_displacements(double z_prev, double z_curr)
-{
-  /* Guard: if the two redshifts are equal, nothing to do */
-  if (z_prev == z_curr)
-    return 0;
-
-  /* Growth ratios for LambdaCDM / scale-independent case */
-  const double r1 = GrowingMode(z_curr, 0.0) / GrowingMode(z_prev, 0.0);
-#ifdef TWO_LPT
-  const double r2 = GrowingMode_2LPT(z_curr, 0.0) / GrowingMode_2LPT(z_prev, 0.0);
-#ifdef THREE_LPT
-  const double r31 = GrowingMode_3LPT_1(z_curr, 0.0) / GrowingMode_3LPT_1(z_prev, 0.0);
-  const double r32 = GrowingMode_3LPT_2(z_curr, 0.0) / GrowingMode_3LPT_2(z_prev, 0.0);
-#endif
-#endif
-
-  double timetmp = MPI_Wtime();
-  /* Scale current displacements in place; previous displacements are left
-     as-is (already containing the z_prev values after shift_all_displacements) */
-#pragma omp parallel for schedule(static)
-  for (long long idx = 0; idx < MyGrids[0].total_local_size; ++idx)
-  {
-    products[idx].Vel[0] *= r1;
-    products[idx].Vel[1] *= r1;
-    products[idx].Vel[2] *= r1;
-#ifdef TWO_LPT
-    products[idx].Vel_2LPT[0] *= r2;
-    products[idx].Vel_2LPT[1] *= r2;
-    products[idx].Vel_2LPT[2] *= r2;
-#ifdef THREE_LPT
-    products[idx].Vel_3LPT_1[0] *= r31;
-    products[idx].Vel_3LPT_1[1] *= r31;
-    products[idx].Vel_3LPT_1[2] *= r31;
-    products[idx].Vel_3LPT_2[0] *= r32;
-    products[idx].Vel_3LPT_2[1] *= r32;
-    products[idx].Vel_3LPT_2[2] *= r32;
-#endif
-#endif
-  }
-
-  timetmp = MPI_Wtime() - timetmp;
-  cputime.mem_transf += timetmp;
-  if (!ThisTask)
-    printf("[%s] Scaled displacements from z=%g to z=%g, cpu time = %f s\n", fdate(), z_prev, z_curr, timetmp);
-  return 0;
-}
-
 #include <sys/stat.h>
 
 int dump_products()
