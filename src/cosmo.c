@@ -31,6 +31,11 @@
 #include <gsl/gsl_interp2d.h>
 #include <gsl/gsl_spline2d.h>
 
+/* Lazy-built inverse comoving-distance spline: chi [Mpc] -> log10(a) */
+static gsl_spline *SPLINE_INVCOMVDIST = 0x0;
+static gsl_interp_accel *ACCEL_INVCOMVDIST = 0x0;
+static int INVCOMVDIST_READY = 0;
+
 #define NVAR (1 + NkBINS * 8)
 #define NBB 10
 #ifdef NORADIATION
@@ -1871,6 +1876,210 @@ double DiameterDistance(double z)
   if (da < 0.0)
     da = 0.0; /* guard against tiny negative overshoot */
   return da;
+}
+
+double InverseComovingDistance(double chi)
+{
+  /* redshift as a function of comoving distance, using an inverse spline
+     built once from the (log10 a) -> chi table. */
+  if (chi <= 0.0)
+    return 0.0;
+
+  if (!INVCOMVDIST_READY)
+  {
+#ifdef _OPENMP
+#pragma omp critical(invchi_init)
+    {
+      if (!INVCOMVDIST_READY)
+      {
+#endif
+        /* Build inverse mapping chi -> log10(a) from existing SPLINE[SP_COMVDIST]
+           Tailored to the PLC redshift span plus a small buffer to maximize accuracy
+           where needed while keeping safe linear extrapolation beyond the ends. */
+        gsl_spline *fwd = SPLINE[SP_COMVDIST];
+        const int n = fwd->size;
+
+        /* Determine PLC redshift span and buffer */
+        double z_lo = params.LastzForPLC;
+        double z_hi = params.StartingzForPLC;
+        if (z_hi < z_lo)
+        {
+          /* swap if provided in reverse */
+          double tmp = z_hi;
+          z_hi = z_lo;
+          z_lo = tmp;
+        }
+        /* buffer in redshift: 10% of span, at least 0.02 (and do not go negative) */
+        double dz_span = (z_hi > z_lo ? (z_hi - z_lo) : 0.0);
+        double dz_buf = dz_span * 0.10;
+        if (dz_buf < 0.02)
+          dz_buf = 0.02;
+        double z_lo_buf = z_lo - dz_buf;
+        if (z_lo_buf < 0.0)
+          z_lo_buf = 0.0;
+        double z_hi_buf = z_hi + dz_buf;
+
+        /* Convert to chi bounds */
+        double chi_lo = ComovingDistance(z_lo_buf);
+        double chi_hi = ComovingDistance(z_hi_buf);
+        if (chi_hi < chi_lo)
+        {
+          /* numeric safety: ensure chi_lo <= chi_hi */
+          double tmp = chi_hi;
+          chi_hi = chi_lo;
+          chi_lo = tmp;
+        }
+
+        /* Count how many forward samples fall within [chi_lo, chi_hi] after reversing */
+        int m = 0;
+        for (int k = 0; k < n; ++k)
+        {
+          int kr = n - 1 - k;
+          double chi_k = fwd->y[kr];
+          if (chi_k + 1e-12 >= chi_lo && chi_k - 1e-12 <= chi_hi)
+            ++m;
+        }
+
+        /* Ensure a reasonable number of nodes; if too few, fall back to full range */
+        int use_full = 0;
+        if (m < 8)
+          use_full = 1;
+
+        int alloc_n = use_full ? n : m;
+        /* allocate temporary arrays */
+        double *xchi = (double *)malloc((size_t)alloc_n * sizeof(double));
+        double *alog = (double *)malloc((size_t)alloc_n * sizeof(double));
+        if (!xchi || !alog)
+        {
+          if (xchi)
+            free(xchi);
+          if (alog)
+            free(alog);
+          /* Mark as unavailable */
+          INVCOMVDIST_READY = 2;
+        }
+        else
+        {
+          if (use_full)
+          {
+            /* Reverse entire table so that chi increases (from ~0 to max) */
+            for (int k = 0; k < n; ++k)
+            {
+              int kr = n - 1 - k;
+              xchi[k] = fwd->y[kr]; /* chi */
+              alog[k] = fwd->x[kr]; /* log10(a) */
+            }
+          }
+          else
+          {
+            /* Take only the PLC-buffered subrange */
+            int t = 0;
+            for (int k = 0; k < n; ++k)
+            {
+              int kr = n - 1 - k;
+              double chi_k = fwd->y[kr];
+              double alog_k = fwd->x[kr];
+              if (chi_k + 1e-12 >= chi_lo && chi_k - 1e-12 <= chi_hi)
+              {
+                xchi[t] = chi_k;
+                alog[t] = alog_k;
+                ++t;
+              }
+            }
+            /* Safety: if something went wrong, revert to full */
+            if (t < 8)
+            {
+              /* fill with full */
+              for (int k = 0; k < n; ++k)
+              {
+                int kr = n - 1 - k;
+                xchi[k] = fwd->y[kr];
+                alog[k] = fwd->x[kr];
+              }
+              alloc_n = n;
+            }
+          }
+
+          /* Ensure the first x is non-negative strictly increasing; if tiny negative, clamp */
+          if (xchi[0] < 0.0)
+            xchi[0] = 0.0;
+
+          /* Optionally inject an exact physical anchor (chi=0 -> a=1 -> log10(a)=0)
+             at the start to avoid any low-chi extrapolation and guarantee chi_min=0. */
+          int inject_anchor = (xchi[0] > 0.0 + 1e-12);
+          double *xchi_use = xchi;
+          double *alog_use = alog;
+          int n_use = alloc_n;
+          if (inject_anchor)
+          {
+            n_use = alloc_n + 1;
+            xchi_use = (double *)malloc((size_t)n_use * sizeof(double));
+            alog_use = (double *)malloc((size_t)n_use * sizeof(double));
+            if (!xchi_use || !alog_use)
+            {
+              if (xchi_use)
+                free(xchi_use);
+              if (alog_use)
+                free(alog_use);
+              /* fall back to original arrays without anchor */
+              xchi_use = xchi;
+              alog_use = alog;
+              n_use = alloc_n;
+              inject_anchor = 0;
+            }
+            else
+            {
+              xchi_use[0] = 0.0;
+              alog_use[0] = 0.0; /* log10(a=1) */
+              for (int k = 0; k < alloc_n; ++k)
+              {
+                xchi_use[k + 1] = xchi[k];
+                alog_use[k + 1] = alog[k];
+              }
+            }
+          }
+
+          /* Allocate and init inverse spline */
+          SPLINE_INVCOMVDIST = gsl_spline_alloc(gsl_interp_cspline, n_use);
+          ACCEL_INVCOMVDIST = gsl_interp_accel_alloc();
+          gsl_spline_init(SPLINE_INVCOMVDIST, xchi_use, alog_use, n_use);
+
+          if (!ThisTask && internal.verbose_level >= VDBG)
+          {
+            fprintf(stdout,
+                    "COSMO: Built %s inverse chi->z over [%.6g, %.6g] Mpc with %d nodes (PLC z [%.6g, %.6g], dz_buf=%.3g)\n",
+                    (use_full || alloc_n == n) ? "full" : "tailored",
+                    xchi_use[0], xchi_use[n_use - 1], n_use, z_lo, z_hi, dz_buf);
+            fflush(stdout);
+          }
+
+          if (inject_anchor)
+          {
+            free(alog_use);
+            free(xchi_use);
+          }
+          free(alog);
+          free(xchi);
+          INVCOMVDIST_READY = 1;
+        }
+#ifdef _OPENMP
+      }
+    }
+#endif
+  }
+
+  if (INVCOMVDIST_READY != 1)
+    return 0.0;
+
+  /* Evaluate log10(a) at chi and convert to z */
+  double alog = my_spline_eval(SPLINE_INVCOMVDIST, chi, ACCEL_INVCOMVDIST);
+  double a = pow(10., alog);
+  if (a <= 0.0)
+    return 0.0;
+  double z = 1.0 / a - 1.0;
+  if (z < 0.0)
+    z = 0.0; /* clamp negative round-off */
+  return z;
 }
 
 double SizeForMass(double m)

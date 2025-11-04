@@ -133,6 +133,11 @@
 #warning "You have correctly compiled the code for the modified gravity scenario. However, please keep in mind that the modified gravity run (MOD_GRAV_FR) is still under development, and this mode should be used with extreme caution as it may not be fully stable. If you are unsure about its usage, please contact the developers for guidance."
 #endif
 
+/* Feature gating and sanity checks for Past Light Cone mass maps */
+#if defined(MASS_MAPS_FILTER_UNCOLLAPSED) && !defined(SNAPSHOT)
+#error "MASS_MAPS_FILTER_UNCOLLAPSED requires SNAPSHOT to provide per-particle collapse redshift (ZACC). Enable SNAPSHOT or disable MASS_MAPS_FILTER_UNCOLLAPSED."
+#endif
+
 /* vectorialization */
 #define DVEC_SIZE 4
 
@@ -592,11 +597,6 @@ int write_LPT_snapshot(void);
 int write_timeless_snapshot(void);
 #endif
 
-/* prototypes in write_snapshot.c */
-#ifdef MASS_MAPS
-int write_mass_maps(double, double);
-#endif
-
 /* prototypes for functions defined in cosmo.c */
 int initialize_cosmology();
 int initialize_MassVariance();
@@ -619,7 +619,6 @@ double InverseGrowingMode(double, int);
 double ComovingDistance(double);
 double DiameterDistance(double);
 double InverseComovingDistance(double);
-double dComovingDistance_dz(double);
 double PowerSpectrum(double);
 double MassVariance(double);
 double dMassVariance_dr(double);
@@ -641,6 +640,9 @@ int read_parameter_file();
 int compute_fmax(void);
 int compute_displacements(int, int, double);
 int compute_first_derivatives(double, int, int, double *);
+/* Fast path for scale-independent growth: rescale per-particle displacement
+  fields from z_prev to z_curr instead of recomputing FFT derivatives. */
+int scale_products_displacements(double z_prev, double z_curr);
 char *fdate(void);
 int dump_products(void);
 int read_dumps(void);
