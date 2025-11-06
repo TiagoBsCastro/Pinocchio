@@ -39,54 +39,86 @@ EXEC = pinocchio.x
 DEBUG = NO
 OMP   = YES
 
-########## Preprocessor Definitions ########## 
-
-# Displacement LPT order # 
+########## Feature toggles (preprocessor definitions) ##########
+#
+# How to use:
+# - Edit the OPTIONS += -D<FLAG> lines below to enable/disable features.
+# - These map to the explanatory parameters in the code and docs, so users can
+#   understand what each directive does and when to activate it.
+# - The default profile here matches a typical PLC + mass-maps run with SNAPSHOT.
+#
+# LPT order and threading helpers
+# -DTWO_LPT, -DTHREE_LPT        Include 2LPT / 3LPT displacement terms.
+# -DMASS_MAPS_THREAD_ACCUM      Use per-thread HEALPix accumulators to reduce atomics.
 
 OPTIONS += -DTWO_LPT
 OPTIONS += -DTHREE_LPT
 OPTIONS += -DMASS_MAPS_THREAD_ACCUM
 
-# PLC reconstruction
+# PLC + Mass Maps pipeline
+# -DPLC                        Enable past light-cone geometry and basis.
+# -DMASS_MAPS                  Enable per-segment PLC entry accumulation to HEALPix maps.
+# -DHAVE_CFITSIO               Enable FITS output via CFITSIO.
+# -DMASS_MAPS_FILTER_UNCOLLAPSED  Keep only entries with ZPLC>ZACC (requires SNAPSHOT).
+# -DDISP_HISTOGRAM             Emit optional endpoint displacement histograms (debug/analysis).
 
 OPTIONS += -DPLC
 OPTIONS += -DMASS_MAPS
 OPTIONS += -DHAVE_CFITSIO
-OPTIONS += -DMASS_MAPS_FILTER_UNCOLLAPSED   # Map only particles with ZPLC>ZACC (requires SNAPSHOT)
+OPTIONS += -DMASS_MAPS_FILTER_UNCOLLAPSED  # ZPLC>ZACC (requires SNAPSHOT)
 OPTIONS += -DDISP_HISTOGRAM
 
-# Dynamics of triaxial collapse #
+# Triaxial collapse model (choose one)
+# -DELL_CLASSIC                 Classic ellipsoidal collapse.
+# -DELL_SNG                    Spherical-no-gravity approximation.
+# -DTABULATED_CT               Use tabulated collapse times.
 
 OPTIONS += -DELL_CLASSIC
 # OPTIONS += -DELL_SNG
 # OPTIONS += -DTABULATED_CT
 
-# Building groups and fragmentation #
+# Group building and fragmentation
+# -DCLASSIC_FRAGMENTATION       Use classic fragmentation instead of default.
 
 # OPTIONS += -DCLASSIC_FRAGMENTATION
 
-# Output #
+# Output and products
+# -DSNAPSHOT                    Populate products[] (zacc, group_ID, displacements, etc.).
+#                               Required by MASS_MAPS_FILTER_UNCOLLAPSED.
+# -DLIGHT_OUTPUT                Reduced output footprint.
+# -DLONGIDS                     Use 64-bit particle IDs.
+# -DDOUBLE_PRECISION_PRODUCTS   Store products in double precision.
 
 OPTIONS += -DSNAPSHOT
-# Note: MASS_MAPS_FILTER_UNCOLLAPSED requires SNAPSHOT to be enabled
 # OPTIONS += -DLIGHT_OUTPUT
 # OPTIONS += -DLONGIDS
 # OPTIONS += -DDOUBLE_PRECISION_PRODUCTS
 
 # Beyond LambdaCDM models
+# Neutrinos and scale-dependent growth:
+# -DSCALE_DEPENDENT             Enable k-dependent growth (recompute via FFT per segment).
+# -DREAD_PK_TABLE               Read external P(k) table (implies scale dependence).
+#
+# Displacement engine:
+# -DRECOMPUTE_DISPLACEMENTS     Maintain prev/curr segment fields (required for mass-maps crossings).
+# -DREAD_HUBBLE_TABLE           Read H(z) table for precise distances.
+# -DMASS_MAPS_MATCH_DIAG        Extra cross-matching diagnostics (PLC groups vs filter decisions).
+#
+# f(R) gravity:
+# -DMOD_GRAV_FR                 Enable modified gravity model (f(R)).
+# -DFR0=1.e-8                   Example FR parameter value.
 
-# these are for neutrino cosmology
 #OPTIONS += -DSCALE_DEPENDENT
 #OPTIONS += -DREAD_PK_TABLE
 OPTIONS += -DRECOMPUTE_DISPLACEMENTS
 OPTIONS += -DREAD_HUBBLE_TABLE
 #OPTIONS += -DMASS_MAPS_MATCH_DIAG
-
-# add also these for f(R) gravity
 # OPTIONS += -DMOD_GRAV_FR
 # OPTIONS += -DFR0=1.e-8
 
-# Other options # 
+# Other options
+# -DWHITENOISE                  White-noise ICs.
+# -DNORADIATION                 Neglect radiation component.
 
 # OPTIONS += -DWHITENOISE
 # OPTIONS += -DNORADIATION
@@ -273,5 +305,36 @@ run_planner: $(OBJECTS) run_planner.o Makefile
 
 clean:
 	\rm -f *.o *~ $(EXEC) run_planner
+
+###############################################################
+# Documentation
+###############################################################
+# Generates HTML docs from in-source Doxygen comments.
+#
+# Usage:
+#   make docs            # builds HTML docs under ../docs/build/html
+#   make docs-clean      # removes generated docs
+#
+# Requirements:
+#   - doxygen installed and available on PATH
+#   - config: ../docs/Doxyfile (provided in repo)
+
+.PHONY: docs docs-clean
+
+DOXYGEN ?= doxygen
+DOCDIR  ?= ../docs
+DOXYCFG ?= $(DOCDIR)/Doxyfile
+
+docs:
+	@command -v $(DOXYGEN) >/dev/null 2>&1 || { \
+	  echo "Error: doxygen not found. Install doxygen and re-run 'make docs'."; \
+	  exit 1; \
+	}
+	@echo "Generating documentation with $$( $(DOXYGEN) --version )..."
+	@cd $(DOCDIR) && $(DOXYGEN) Doxyfile
+	@echo "Docs available at $(DOCDIR)/build/html/index.html"
+
+docs-clean:
+	@rm -rf $(DOCDIR)/build
 
 

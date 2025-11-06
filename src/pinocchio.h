@@ -353,7 +353,6 @@ void mass_maps_free_sheets(void);
 int mass_maps_write_sheet_table(void);
 
 /* MASS_MAPS / PLC auxiliary utilities */
-int mass_maps_replication_overlaps_sheet(int rep_id, int sheet_id);
 int mass_maps_particle_sign_change(int rep_id,
                                    const double q[3],                      /* Lagrangian or reference position */
                                    const double disp_prev[3],              /* previous total displacement */

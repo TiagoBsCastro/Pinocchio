@@ -1,4 +1,4 @@
-/*
+/**
  * MASS_MAPS: per-segment PLC entries → HEALPix maps (products-only)
  * -----------------------------------------------------------------
  * Purpose
@@ -61,10 +61,7 @@
  *     If the computed Ncap is 0 (too small aperture for the chosen NSIDE), maps are disabled with a warning.
  *   - FITS headers include provenance and filter stats when enabled:
  *       FILTER='ZPLC>ZACC', ZF_CONS/ZF_EXCL/ZF_INCL/ZF_FEXCL, APERTURE, and map geometry.
- *
- * Accuracy contract
- *   All refactors preserve the crossing criterion and accumulation semantics. Optimizations must not change results.
- */
+ **/
 #include "pinocchio.h"
 #ifdef MASS_MAPS
 #include <math.h>
@@ -123,18 +120,48 @@
 #ifndef DISP_HIST_AT_CURR
 #define DISP_HIST_AT_CURR 1
 #endif
-/* Write an ASCII histogram file on rank 0 */
+/** Write an ASCII histogram file on rank 0
+ *
+ * mass_maps_disp_hist_write_file
+ * ------------------------------
+ * Purpose
+ *   Write the global displacement histogram |x(q,z)-q| (measured in InterPartDist
+ *   units) to an ASCII file. Only MPI rank 0 performs I/O.
+ *
+ * Inputs
+ *   - z_target         Redshift at which the endpoint histogram was sampled.
+ *   - hist_global      Array of length DISP_HIST_NBINS with global bin counts
+ *                      (already MPI-reduced across tasks).
+ *   - underflow_global Global count of samples with d < DMIN.
+ *   - overflow_global  Global count of samples with d >= DMAX.
+ *   - sampled_global   Global number of samples considered (including under/overflow).
+ *
+ * Behavior and file format
+ *   - Filename: pinocchio.&lt;z&gt;.&lt;RunFlag&gt;.disp_hist.out where &lt;z&gt; is formatted with
+ *     4 decimals for stable sorting/comparisons.
+ *   - Header: prints grid/analysis provenance and the variable AABB pad used by
+ *     mass-maps at this redshift, reported in Mpc, Mpc/h, and PAD_CELLS
+ *     (PAD_PHYS / InterPartDist) for diagnostics.
+ *   - Data rows (one per bin):
+ *       bin_lo  bin_hi  count  fraction  cum_fraction
+ *
+ * Units
+ *   Histogram d values are in InterPartDist units.
+ *
+ * Thread-safety / MPI
+ *   Inputs must be globally reduced; only rank 0 writes.
+ */
 static void mass_maps_disp_hist_write_file(double z_target,
                                            const unsigned long long *hist_global,
                                            unsigned long long underflow_global,
                                            unsigned long long overflow_global,
                                            unsigned long long sampled_global)
 {
+  /* Only root performs I/O; other ranks return immediately */
   if (ThisTask != 0)
     return;
+  /* Build filename: pinocchio.<z>.<RunFlag>.disp_hist.out with fixed-width z */
   char fname[4 * LBLENGTH];
-  /* Use fixed-width z formatting for stable filenames */
-  /* Preferred naming: pinocchio.<z>.<RunFlag>.disp_hist.out, with z formatted to 4 decimals */
   snprintf(fname, sizeof(fname), "pinocchio.%.4f.%s.disp_hist.out", z_target, params.RunFlag);
   FILE *fd = fopen(fname, "w");
   if (!fd)
@@ -146,17 +173,16 @@ static void mass_maps_disp_hist_write_file(double z_target,
   double dmax = (double)DISP_HIST_DMAX;
   int nb = (int)DISP_HIST_NBINS;
   int stride = (int)DISP_HIST_STRIDE;
-  /* Compute variable pad at this redshift for clarity in header */
+  /* Compute variable buffer pad at this redshift for header context */
   double sigma8 = params.Sigma8;
   double factor = MASS_MAPS_VARPAD_FACTOR;
   double res = params.InterPartDist; /* true Mpc */
   double h = params.Hubble100;
-  /* Model pad in Mpc/h, then convert to true Mpc and cells */
   double pad_phys_h = factor * pow(sigma8 / 0.8, 1.5) / (1.0 + z_target); /* Mpc/h */
   double pad_phys = (h > 0.0) ? (pad_phys_h / h) : pad_phys_h;            /* true Mpc */
   double pad_cells = (res > 0.0) ? (pad_phys / res) : 0.0;                /* dimensionless */
-  /* Header */
-  fprintf(fd, "# Displacement histogram |x(q,z)-q| in InterPartDist (Mpc) units\n");
+  /* Header with provenance and units */
+  fprintf(fd, "# Displacement histogram |x(q,z)-q| in InterPartDist units\n");
   fprintf(fd, "# z=%.8f NBINS=%d DMIN=%.6g DMAX=%.6g SPACING=linear STRIDE=%d\n", z_target, nb, dmin, dmax, stride);
   fprintf(fd, "# GRID=(%d,%d,%d) InterPartDist(Mpc)=%.9g LPT_ORDER=%d MPI_TASKS=%d RUN=%s\n",
           (int)MyGrids[0].GSglobal[_x_], (int)MyGrids[0].GSglobal[_y_], (int)MyGrids[0].GSglobal[_z_],
@@ -178,7 +204,7 @@ static void mass_maps_disp_hist_write_file(double z_target,
           (unsigned long long)underflow_global,
           (unsigned long long)overflow_global);
   fprintf(fd, "# Columns: bin_lo bin_hi count fraction cum_fraction\n");
-
+  /* Emit rows */
   double width = (nb > 0) ? ((dmax - dmin) / (double)nb) : 0.0;
   unsigned long long cum = 0ULL;
   for (int b = 0; b < nb; ++b)
@@ -202,7 +228,33 @@ static void mass_maps_disp_hist_write_file(double z_target,
   }
 }
 
-/* Accumulate histogram for a single endpoint selector: 0=prev, 1=curr */
+/**
+ * mass_maps_disp_hist_accumulate_endpoint
+ * ---------------------------------------
+ * Purpose
+ *   Accumulate a local displacement histogram for one endpoint selector:
+ *   use_curr=0 for the previous endpoint ("prev"), use_curr=1 for the current
+ *   endpoint ("curr"). Displacements are |x(q,z)-q| in InterPartDist units
+ *   (i.e., multiples of the InterPartDist). Underflow/overflow and
+ *   total sampled counters are tracked alongside per-bin counts.
+ *
+ * Parameters
+ *   - use_curr         0: use products.*_prev fields; 1: use current products.* fields.
+ *   - hist_local       Output array of length DISP_HIST_NBINS (must be zero-initialized by caller).
+ *   - underflow_local  Output: incremented by samples with d < DMIN.
+ *   - overflow_local   Output: incremented by samples with d >= DMAX.
+ *   - sampled_local    Output: incremented by total samples considered (after stride filter).
+ *
+ * Behavior
+ *   - Iterates over this task's local FFT tile; optional sub-sampling via DISP_HIST_STRIDE
+ *     by applying a deterministic (i+j+k) % stride == 0 filter on global indices.
+ *   - Builds endpoint displacement magnitude per lattice site including compiled LPT orders.
+ *   - Uses per-thread private histograms and reduces into hist_local to minimize contention.
+ *
+ * Threading
+ *   OpenMP is supported; per-thread histograms are accumulated with a final reduction.
+ *   No MPI calls happen here; caller performs cross-task reductions/writes.
+ **/
 static void mass_maps_disp_hist_accumulate_endpoint(int use_curr,
                                                     unsigned long long *hist_local,
                                                     unsigned long long *underflow_local,
@@ -329,7 +381,34 @@ static void mass_maps_disp_hist_accumulate_endpoint(int use_curr,
   *sampled_local += tot;
 }
 
-/* Orchestrator entry: accumulate and write histograms for prev/curr endpoints */
+/**
+ * mass_maps_disp_hist_on_segment
+ * ------------------------------
+ * Purpose
+ *   Orchestrate per-segment displacement histograms at the two segment endpoints
+ *   (previous and current). Optionally computes for each endpoint depending on
+ *   DISP_HIST_AT_PREV / DISP_HIST_AT_CURR, performs MPI reductions to rank 0,
+ *   and writes ASCII histogram files via mass_maps_disp_hist_write_file.
+ *
+ * Parameters
+ *   - segment_index  Index of the current fragmentation segment (not used for I/O;
+ *                    retained for context and future use).
+ *   - z_prev         Redshift at previous endpoint of the segment.
+ *   - z_curr         Redshift at current endpoint of the segment.
+ *
+ * Behavior
+ *   - Allocates per-endpoint task-local histograms (length DISP_HIST_NBINS) when enabled.
+ *   - Invokes mass_maps_disp_hist_accumulate_endpoint for prev/curr to fill local bins and
+ *     counters (underflow/overflow/sampled) in InterPartDist units.
+ *   - Reduces bins and counters across MPI tasks to rank 0 and writes one file per
+ *     enabled endpoint using z_prev/z_curr in the filename and header.
+ *   - Frees temporary buffers.
+ *
+ * Notes
+ *   - Units: The accumulator operates in InterPartDist (true Mpc) units; the writer prints
+ *     both InterPartDist and variable pad context in headers. No unit conversion happens here.
+ *   - Concurrency: This function uses MPI_Reduce but no OpenMP loops directly.
+ **/
 static void mass_maps_disp_hist_on_segment(int segment_index, double z_prev, double z_curr)
 {
   (void)segment_index;
@@ -337,7 +416,7 @@ static void mass_maps_disp_hist_on_segment(int segment_index, double z_prev, dou
   if (nb <= 0 || DISP_HIST_DMAX <= DISP_HIST_DMIN)
     return;
 
-  /* Common local buffers */
+  /* Allocate task-local buffers (conditional on compile-time toggles) */
   unsigned long long *hist_prev_local = NULL, *hist_curr_local = NULL;
   unsigned long long uf_prev_local = 0ULL, of_prev_local = 0ULL, tot_prev_local = 0ULL;
   unsigned long long uf_curr_local = 0ULL, of_curr_local = 0ULL, tot_curr_local = 0ULL;
@@ -352,7 +431,7 @@ static void mass_maps_disp_hist_on_segment(int segment_index, double z_prev, dou
   if (hist_curr_local)
     mass_maps_disp_hist_accumulate_endpoint(1, hist_curr_local, &uf_curr_local, &of_curr_local, &tot_curr_local);
 
-  /* Global reductions and writes */
+  /* Global reductions (MPI) and writes on rank 0 */
   if (hist_prev_local)
   {
     unsigned long long *hist_prev_global = NULL;
@@ -410,10 +489,41 @@ typedef struct
 
 static MassMapsFilterDiag g_massmaps_filter_diag = {0};
 
-/* Write FILTER-related header keywords if available */
+/**
+ * mass_maps_write_filter_keywords
+ * -------------------------------
+ * Purpose
+ *   If MASS_MAPS_FILTER_UNCOLLAPSED is enabled and diagnostics are present for
+ *   the given segment, write ZPLC>ZACC filter metadata into the segment FITS
+ *   header. This makes filtering decisions visible and reproducible in outputs.
+ *
+ * Parameters
+ *   - fptr           Open CFITSIO file handle for the segment map being written.
+ *   - segment_index  Segment index that the metadata refers to; used to guard
+ *                    against stale/mismatched diagnostics.
+ *
+ * Behavior
+ *   - Validates that diagnostics are present and match segment_index.
+ *   - Writes the following header keys on rank 0 (caller writes on root only):
+ *       FILTER   = 'ZPLC>ZACC'              (filter condition)
+ *       ZF_CONS  = considered entries       (TLONGLONG)
+ *       ZF_EXCL  = excluded entries         (TLONGLONG)
+ *       ZF_INCL  = included entries         (TLONGLONG)
+ *       ZF_FEXCL = excluded fraction [0..1] (TDOUBLE)
+ *       ZPLC_MIN / ZPLC_MAX                 (TDOUBLE)
+ *       ZACC_MIN / ZACC_MAX                 (TDOUBLE)
+ *       ZPLC_OOS  = z_plc outside seg (tol) (TLONGLONG)
+ *     Also appends a concise HISTORY line summarizing counts.
+ *
+ * Notes
+ *   - No MPI calls occur here; inputs are expected to be globally reduced
+ *     beforehand during segment processing.
+ *   - If MASS_MAPS_FILTER_UNCOLLAPSED is not defined, this is a no-op.
+ **/
 static void mass_maps_write_filter_keywords(fitsfile *fptr, int segment_index)
 {
 #ifdef MASS_MAPS_FILTER_UNCOLLAPSED
+  /* Basic guards: null file, no diagnostics, or mismatched segment */
   if (!fptr)
     return;
   if (!g_massmaps_filter_diag.present)
@@ -482,6 +592,20 @@ static int mass_maps_matchdiag_inited = 0;
 static unsigned long long *mass_maps_plc_names = NULL;
 static int mass_maps_plc_n = 0;
 
+/**
+ * cmp_ull
+ * -------
+ * Purpose
+ *   qsort/bsearch comparator for unsigned long long values. Used to sort and
+ *   later binary-search the list of PLC group unique names when matching
+ *   entries against the PLC halo catalog for diagnostics.
+ *
+ * Parameters
+ *   - a, b  Pointers to elements to compare (each points to an unsigned long long).
+ *
+ * Returns
+ *   -1 if *a < *b, 0 if equal, +1 if *a > *b.
+ */
 static int cmp_ull(const void *a, const void *b)
 {
   unsigned long long aa = *(const unsigned long long *)a;
@@ -490,6 +614,20 @@ static int cmp_ull(const void *a, const void *b)
                                     : 0;
 }
 
+/**
+ * mass_maps_matchdiag_init
+ * ------------------------
+ * Purpose
+ *   One-time initializer for MASS_MAPS_MATCH_DIAG. Builds a sorted array of
+ *   PLC halo unique names (plcgroups[i].name) sized to plc.Nstored, so that
+ *   group membership tests can use bsearch in O(log N).
+ *
+ * Behavior
+ *   - Allocates mass_maps_plc_names and fills it from plcgroups.
+ *   - Sorts via qsort with cmp_ull.
+ *   - Sets mass_maps_matchdiag_inited = 1 to guard repeated work.
+ *   - If allocation fails or no PLC groups exist, leaves list null/empty.
+ */
 static void mass_maps_matchdiag_init(void)
 {
   if (mass_maps_matchdiag_inited)
@@ -509,6 +647,20 @@ static void mass_maps_matchdiag_init(void)
   mass_maps_matchdiag_inited = 1;
 }
 
+/**
+ * mass_maps_group_in_plc_by_id
+ * ----------------------------
+ * Purpose
+ *   Check whether a given group_ID corresponds to a halo present in the PLC
+ *   catalog, using the pre-built sorted list of PLC unique names.
+ *
+ * Parameters
+ *   - gid  Group identifier (index into groups[]); gid <= 0 returns 0.
+ *
+ * Returns
+ *   1 if the group's unique name is found in the PLC list, else 0. If the
+ *   matching list is not initialized or empty, returns 0.
+ */
 static inline int mass_maps_group_in_plc_by_id(int gid)
 {
   if (gid <= 0)
@@ -534,14 +686,6 @@ static inline int mass_maps_group_in_plc_by_id(int gid)
 /* Culling defaults  */
 #ifndef MASS_MAPS_BLOCKS
 #define MASS_MAPS_BLOCKS 8
-#endif
-/* Variable buffer factor (dimensionless), defaults to 20 as per empirical fit */
-#ifndef MASS_MAPS_VARPAD_FACTOR
-#define MASS_MAPS_VARPAD_FACTOR 20.0
-#endif
-/* Last-segment diagnostics warn threshold for variable buffer */
-#ifndef MASS_MAPS_VARPAD_WARN_FRAC
-#define MASS_MAPS_VARPAD_WARN_FRAC (0.05)
 #endif
 /* Default per-axis block counts fall back to MASS_MAPS_BLOCKS if not provided */
 #ifndef MASS_MAPS_BLOCKS_X
@@ -588,6 +732,25 @@ static long MassMapNCAP = 0;
 #define MASS_MAPS_FULLSKY_OUTPUT 0
 #endif
 
+/**
+ * mass_maps_cache_plc_basis_and_center
+ * ------------------------------------
+ * Purpose
+ *   Lazily cache the PLC center in physical units (true Mpc) and the
+ *   orthonormal sky basis vectors (e1,e2,e3) used for pixelization and
+ *   aperture tests. Avoids recomputing these per call in hot paths.
+ *
+ * Behavior
+ *   - If the cache is already initialized (MassMapPLC_BasisReady!=0), returns.
+ *   - Otherwise, converts plc.center (grid units) to physical units via
+ *     InterPartDist, and copies the precomputed unit basis vectors
+ *     (plc.xvers, plc.yvers, plc.zvers) into local statics.
+ *
+ * Notes
+ *   - Units: positions scaled by params.InterPartDist (true Mpc).
+ *   - Threading: benign double-init is possible if called concurrently, but
+ *     values are idempotent and identical, so no functional impact.
+ */
 static inline void mass_maps_cache_plc_basis_and_center(void)
 {
   if (MassMapPLC_BasisReady)
@@ -608,7 +771,26 @@ static inline void mass_maps_cache_plc_basis_and_center(void)
   MassMapPLC_BasisReady = 1;
 }
 
-/* Return 1 if the absolute position lies within the PLC angular aperture */
+/**
+ * mass_maps_entry_inside_aperture
+ * -------------------------------
+ * Purpose
+ *   Test whether an absolute position (physical units) lies inside the PLC
+ *   angular aperture (spherical cap) centered on the PLC axis.
+ *
+ * Parameters
+ *   - pos  Absolute position in true Mpc (same units as InterPartDist-scaled
+ *           positions elsewhere in mass-maps).
+ *
+ * Returns
+ *   1 if the angle between (pos - PLC_center) and the PLC axis (plc.zvers)
+ *   is <= params.PLCAperture [deg]; otherwise 0. Returns 0 for the degenerate
+ *   case where the vector from center has zero length.
+ *
+ * Notes
+ *   - Uses the cached center/basis via mass_maps_cache_plc_basis_and_center().
+ *   - Clamps numerical round-off on cosines to [-1,1] before acos.
+ */
 static inline int mass_maps_entry_inside_aperture(const double pos[3])
 {
   mass_maps_cache_plc_basis_and_center();
@@ -628,7 +810,8 @@ static inline int mass_maps_entry_inside_aperture(const double pos[3])
   double A = params.PLCAperture;
   return angle <= A;
 }
-/*
+
+/**
  * mass_maps_init_sheets
  * ---------------------
  * Build the array of MassSheet structures from the global output redshift list.
@@ -769,7 +952,7 @@ int mass_maps_init_sheets(void)
   return 0;
 }
 
-/*
+/**
  * mass_maps_free_sheets
  * ---------------------
  * Free MassSheets and the boundary arrays; safe to call multiple times.
@@ -793,14 +976,52 @@ void mass_maps_free_sheets(void)
 /* HEALPix map allocation (one map per mass sheet)            */
 /* ---------------------------------------------------------- */
 
-/* Return number of pixels for an NSIDE; avoid chealpix dependency in calc */
+/**
+ * mass_maps_npix_from_nside
+ * -------------------------
+ * Purpose
+ *   Return the total number of HEALPix pixels for a given NSIDE without
+ *   requiring any external HEALPix library calls.
+ *
+ * Parameters
+ *   - nside  HEALPix NSIDE (power-of-two, >0 expected).
+ *
+ * Returns
+ *   12 * nside^2 as a long integer. For non-positive nside, the arithmetic
+ *   still evaluates consistently to 0 or negative; callers are expected to
+ *   validate nside beforehand.
+ */
 static inline long mass_maps_npix_from_nside(int nside)
 {
   return 12L * (long)nside * (long)nside;
 }
 
-/* Compute number of RING pixels in a spherical cap of aperture (deg) centered at theta=0 (PLC axis)
-   using HEALPix ring formulas. Returns a contiguous prefix length [0..NPIX]. */
+/**
+ * mass_maps_ncap_from_aperture
+ * ----------------------------
+ * Purpose
+ *   Compute the number of HEALPix RING pixels contained in a spherical cap of
+ *   angular radius 'aperture_deg' centered at theta=0 (i.e., around the north pole
+ *   aligned with the PLC axis). The result corresponds to the contiguous prefix
+ *   [0 .. Ncap-1] in RING ordering for a cap centered at the pole.
+ *
+ * Parameters
+ *   - nside         HEALPix NSIDE (power-of-two, >0).
+ *   - aperture_deg  Spherical cap radius in degrees; clamped to [0, 180].
+ *
+ * Returns
+ *   The number of pixels Ncap in the cap (0 <= Ncap <= 12*Nside^2). For aperture=0,
+ *   returns 0. For aperture>=180, returns full-sky count (12*Nside^2).
+ *
+ * Notes
+ *   - Uses analytic HEALPix ring geometry without calling chealpix:
+ *       • North polar rings i=1..N-1: z_i = 1 - i^2/(3N^2), npix_i = 4i
+ *       • Equatorial rings i=N..3N:   z_i = (4N - 2i)/(3N), npix_i = 4N
+ *       • South polar rings i=3N+1..4N-1 with m=4N-i: z_i = -1 + m^2/(3N^2), npix_i = 4m
+ *     Rings with z >= z0, where z0=cos(theta_cap), are fully included.
+ *   - O(1) cost; avoids per-pixel work and chealpix dependency.
+ *   - The cap is symmetric about the pole, so the included pixels form a RING prefix.
+ */
 static long mass_maps_ncap_from_aperture(int nside, double aperture_deg)
 {
   if (nside <= 0)
@@ -863,7 +1084,24 @@ static long mass_maps_ncap_from_aperture(int nside, double aperture_deg)
   return ncap;
 }
 
-/* Accessor: pointer to segment s map (size MassMapNPIX) */
+/**
+ * mass_maps_segment_ptr
+ * ---------------------
+ * Purpose
+ *   Accessor for the per-segment HEALPix map storage.
+ *
+ * Parameters
+ *   - s  Segment index (0 .. NMassSheets-1).
+ *
+ * Returns
+ *   Pointer to the beginning of the map buffer for segment s (length
+ *   MassMapNPIX), or NULL if maps are not allocated or s is out of range.
+ *
+ * Notes
+ *   - The memory layout is a flat array of size NMassSheets * MassMapNPIX,
+ *     with segment s at offset s * MassMapNPIX.
+ *   - Caller must not write past MassMapNPIX elements.
+ */
 static inline double *mass_maps_segment_ptr(int s)
 {
   if (!MassMapSegmentMaps || s < 0 || s >= NMassSheets)
@@ -874,7 +1112,22 @@ static inline double *mass_maps_segment_ptr(int s)
 /* Forward decl: returns pole pixel (theta=0) in RING ordering */
 static inline long mass_maps_axis_pixel_ring(int nside);
 
-/* Zero all maps */
+/**
+ * mass_maps_zero_all_maps
+ * -----------------------
+ * Purpose
+ *   Zero-initialize all per-segment HEALPix map buffers.
+ *
+ * Behavior
+ *   - No-op if maps are not allocated (MassMapSegmentMaps == NULL).
+ *   - Iterates over the flat buffer of size NMassSheets * MassMapNPIX and
+ *     sets all entries to 0.0.
+ *
+ * Notes
+ *   - Single-threaded loop; safe to call from any context before concurrent
+ *     accumulation begins. If parallelization is desired, this loop can be
+ *     guarded with OpenMP pragmas as needed.
+ */
 static void mass_maps_zero_all_maps(void)
 {
   if (!MassMapSegmentMaps)
@@ -884,7 +1137,25 @@ static void mass_maps_zero_all_maps(void)
     MassMapSegmentMaps[i] = 0.0;
 }
 
-/* Free maps */
+/**
+ * mass_maps_free_maps
+ * -------------------
+ * Purpose
+ *   Release HEALPix map memory owned by this module and reset associated
+ *   state so maps are considered uninitialized.
+ *
+ * Behavior
+ *   - Frees MassMapSegmentMaps (per-segment map buffer) if allocated and
+ *     sets the pointer to NULL.
+ *   - Frees MassMapReduceBuffer (temporary MPI reduction buffer) if allocated
+ *     and sets the pointer to NULL.
+ *   - Resets MassMapNSIDE_current and MassMapNPIX to 0 to mark maps as absent.
+ *
+ * Notes
+ *   - Idempotent: safe to call multiple times.
+ *   - Does not modify MassMapNCAP; callers that change NSIDE/aperture should
+ *     recompute NCAP during re-initialization (via mass_maps_init_healpix_maps).
+ */
 void mass_maps_free_maps(void)
 {
   if (MassMapSegmentMaps)
@@ -897,7 +1168,36 @@ void mass_maps_free_maps(void)
   MassMapNPIX = 0;
 }
 
-/* Ensure per-segment HEALPix maps are allocated for given NSIDE */
+/**
+ * mass_maps_init_healpix_maps
+ * ---------------------------
+ * Purpose
+ *   Ensure per-segment HEALPix maps are allocated and initialized for the
+ *   requested NSIDE, honoring the configured PLC aperture and output mode.
+ *
+ * Parameters
+ *   - nside  Desired HEALPix NSIDE (power-of-two, >0).
+ *
+ * Behavior
+ *   - Frees any existing maps, then computes:
+ *       npix_full = 12 * nside^2
+ *       Ncap      = mass_maps_ncap_from_aperture(nside, params.PLCAperture)
+ *     and selects MassMapNPIX based on MASS_MAPS_FULLSKY_OUTPUT:
+ *       • FULLSKY: NPIX = npix_full (entire sphere)
+ *       • CAP:     NPIX = Ncap      (RING prefix 0..Ncap-1 around north pole)
+ *   - Allocates a flat buffer of doubles of size NMassSheets * NPIX and zeros it.
+ *   - On rank 0 and at diagnostic verbosity, prints a summary (ORDERING=RING).
+ *
+ * Returns
+ *   0 on success; 1 if inputs are invalid, memory allocation fails, or the
+ *   computed NPIX is zero (maps disabled). In failure cases, internal state
+ *   (MassMapNSIDE_current, MassMapNPIX, MassMapNCAP) is reset to 0.
+ *
+ * Notes
+ *   - The map memory is owned by this module and must be released with
+ *     mass_maps_free_maps().
+ *   - Aperture is in degrees; cap computation is analytic in RING geometry.
+ */
 int mass_maps_init_healpix_maps(int nside)
 {
   if (nside <= 0)
@@ -959,9 +1259,29 @@ int mass_maps_init_healpix_maps(int nside)
 /* PLC-oriented basis and pixelization helpers                */
 /* ---------------------------------------------------------- */
 
-/* Compute HEALPix pixel for segment s at entry between Pprev/Pcurr using alpha in [0,1].
-   Orientation is defined by the PLC axis used for groups. Returns 1 on success, 0 on failure. */
-/* Debug helpers: compute simple stats and axis pixel id */
+/**
+ * mass_maps_map_stats
+ * -------------------
+ * Purpose
+ *   Compute simple statistics over a map buffer: sum, minimum, maximum, and
+ *   the count of non-zero entries (nnz).
+ *
+ * Parameters
+ *   - map      Pointer to the map array (length npix). Must be non-NULL if
+ *              npix > 0. Not dereferenced when npix <= 0.
+ *   - npix     Number of pixels/elements in the map (may be 0).
+ *   - sum_out  If non-NULL, receives the sum of all elements (0.0 if npix==0).
+ *   - min_out  If non-NULL, receives the minimum value (0.0 if npix==0).
+ *   - max_out  If non-NULL, receives the maximum value (0.0 if npix==0).
+ *   - nnz_out  If non-NULL, receives the count of elements with value != 0.0.
+ *
+ * Notes
+ *   - Non-zero detection uses exact floating-point comparison (v != 0.0), with
+ *     no epsilon tolerance. Callers needing a threshold should apply it
+ *     externally.
+ *   - When npix <= 0, outputs (if requested) are set to their neutral defaults:
+ *     sum=0, min=0, max=0, nnz=0.
+ */
 static inline void mass_maps_map_stats(const double *map, long npix,
                                        double *sum_out, double *min_out, double *max_out, long *nnz_out)
 {
@@ -994,6 +1314,25 @@ static inline void mass_maps_map_stats(const double *map, long npix,
     *nnz_out = nnz;
 }
 
+/**
+ * mass_maps_axis_pixel_ring
+ * -------------------------
+ * Purpose
+ *   Return the HEALPix pixel index (RING ordering) at polar angle theta=0 and
+ *   phi=0 for a given NSIDE. In this module, theta=0 corresponds to the PLC
+ *   axis direction used to orient maps.
+ *
+ * Parameters
+ *   - nside  HEALPix NSIDE (power-of-two, >0 expected).
+ *
+ * Returns
+ *   Pixel index in [0, 12*nside^2 - 1] on success; -1 if the mapping fails or
+ *   nside is invalid.
+ *
+ * Notes
+ *   - Uses RING ordering (ang2pix_ring). Not valid for NESTED ordering.
+ *   - This is a convenience helper for diagnostics and header metadata.
+ */
 static inline long mass_maps_axis_pixel_ring(int nside)
 {
   long pix = -1;
@@ -1001,7 +1340,47 @@ static inline long mass_maps_axis_pixel_ring(int nside)
   return pix;
 }
 
-/* Fast crossing test from absolute, replication-shifted positions with precomputed chi */
+/**
+ * mass_maps_crossing_from_shifted_positions
+ * ----------------------------------------
+ * Purpose
+ *   Detect and locate a radial crossing of the PLC spherical boundary along
+ *   a particle segment, using absolute positions that already include the
+ *   replication shift, and precomputed chi values at the segment endpoints.
+ *   The boundary is defined by r(alpha) = chi(alpha), with
+ *     H = chi - r, and linear interpolation in alpha between endpoints.
+ *
+ * Parameters
+ *   - Pprev      Absolute position at the previous endpoint (true Mpc),
+ *                replication shift already applied.
+ *   - Pcurr      Absolute position at the current endpoint (true Mpc),
+ *                replication shift already applied.
+ *   - c_phys     PLC center in true Mpc (same frame/units as Pprev/Pcurr).
+ *   - chi_prev   Comoving distance chi at the previous endpoint (Mpc). In the
+ *                present-epoch frame used here, this equals the corresponding
+ *                physical distance, so it is directly comparable to r.
+ *   - chi_curr   Comoving distance chi at the current endpoint (Mpc).
+ *   - alpha_out  Optional; on success, receives the segment interpolation
+ *                parameter alpha in [0,1] locating the crossing.
+ *   - entry_pos  Optional; on success, receives the 3D crossing position
+ *                Pprev + alpha * (Pcurr - Pprev).
+ *
+ * Returns
+ *   1 if a crossing is detected and the intersection is computed; otherwise 0.
+ *
+ * Behavior
+ *   - Let H_prev = chi_prev - |Pprev - c| and H_curr = chi_curr - |Pcurr - c|.
+ *     A crossing is reported only for the inside→outside case
+ *       (H_prev > 0 && H_curr <= 0).
+ *   - Uses linear interpolation of H in alpha and solves H(alpha)=0 via
+ *       alpha = H_prev / (H_prev - H_curr), with a small-denominator guard
+ *       using MASS_MAPS_F_EPS. The resulting alpha is clamped to [0,1].
+ *
+ * Notes
+ *   - Purely local computation; no shared state is modified.
+ *   - Caller must ensure units are consistent: P*, c_phys in true Mpc; chi_* in
+ *     Mpc (comoving), which here are comparable to present-epoch physical Mpc.
+ */
 static inline int mass_maps_crossing_from_shifted_positions(const double Pprev[3],
                                                             const double Pcurr[3],
                                                             const double c_phys[3],
@@ -1046,7 +1425,38 @@ static inline int mass_maps_crossing_from_shifted_positions(const double Pprev[3
 /* Sub-volume culling helpers (AABB vs PLC shell)             */
 /* ---------------------------------------------------------- */
 
-/* Compute tight lower/upper bounds for distance from point c to an AABB [min,max] */
+/**
+ * aabb_distance_bounds_to_point
+ * -----------------------------
+ * Purpose
+ *   Compute tight lower and upper bounds for the Euclidean distance from a
+ *   point c to an axis-aligned bounding box (AABB) defined by per-axis
+ *   minima and maxima.
+ *
+ * Parameters
+ *   - minv      3-vector of AABB minimum coordinates (x_min, y_min, z_min).
+ *   - maxv      3-vector of AABB maximum coordinates (x_max, y_max, z_max).
+ *   - c         3-vector of point coordinates.
+ *   - dmin_out  If non-NULL, receives the minimum possible distance from c to
+ *               any point in the AABB (0 if c lies inside the box).
+ *   - dmax_out  If non-NULL, receives the maximum possible distance from c to
+ *               any point in the AABB (distance to the farthest corner).
+ *
+ * Behavior
+ *   - d_min is computed as the length of the per-axis clamp residuals (zero
+ *     when c is inside the interval [minv,maxv] on that axis).
+ *   - d_max is computed as the distance to the farthest AABB corner from c,
+ *     found by taking the larger absolute delta on each axis.
+ *
+ * Invariants
+ *   - For any inputs, d_min <= d_max, and both are >= 0.
+ *   - Units follow the inputs (e.g., true Mpc when min/max are given in Mpc).
+ *
+ * Notes
+ *   - Used for quick culling against the PLC spherical shell: compare these
+ *     bounds with the segment's chi interval to early-accept or early-reject
+ *     replications before finer tests.
+ */
 static inline void aabb_distance_bounds_to_point(const double minv[3], const double maxv[3], const double c[3], double *dmin_out, double *dmax_out)
 {
   /* d_min: point-to-box distance */
@@ -1075,9 +1485,37 @@ static inline void aabb_distance_bounds_to_point(const double minv[3], const dou
     *dmax_out = sqrt(d2max);
 }
 
-/* no env accessors: all mass-maps culling knobs are compile-time macros now */
-
-/* Compute HEALPix pixel directly from an absolute position (phys units) */
+/**
+ * mass_maps_compute_pixel_from_pos
+ * --------------------------------
+ * Purpose
+ *   Compute the HEALPix RING pixel index corresponding to an absolute
+ *   3D position expressed in physical units (true Mpc), using the PLC
+ *   orientation (e1,e2,e3) and center previously cached.
+ *
+ * Parameters
+ *   - pos      Absolute position (true Mpc) in the same frame as the cached
+ *              PLC center.
+ *   - nside    HEALPix NSIDE (power-of-two, >0).
+ *   - pix_out  Output pointer; on success receives the pixel index (>=0).
+ *
+ * Returns
+ *   1 on success; 0 on invalid inputs (pix_out==NULL or nside<=0), when the
+ *   position coincides with the PLC center (undefined direction), or if the
+ *   RING mapping fails.
+ *
+ * Behavior
+ *   - Translates pos by the cached PLC center and normalizes to obtain vhat.
+ *   - Computes spherical angles relative to the PLC basis:
+ *       cos(theta) = vhat·e3,   phi = atan2(vhat·e2, vhat·e1) in [0,2π).
+ *   - Calls ang2pix_ring(NSIDE, theta, phi) and stores the result in pix_out.
+ *
+ * Notes
+ *   - Uses RING ordering only. For partial-sky outputs, callers must also
+ *     check that the returned pixel lies within the active prefix (0..Ncap-1).
+ *   - Invokes mass_maps_cache_plc_basis_and_center() to ensure the PLC center
+ *     and basis are available.
+ */
 int mass_maps_compute_pixel_from_pos(const double pos[3], int nside, long *pix_out)
 {
   if (!pix_out || nside <= 0)
@@ -1118,7 +1556,30 @@ int mass_maps_compute_pixel_from_pos(const double pos[3], int nside, long *pix_o
   return 1;
 }
 
-/* Accumulate a unit weight into the HEALPix map for segment s at the interpolated entry point */
+/**
+ * mass_maps_accumulate_entry_pos
+ * ------------------------------
+ * Purpose
+ *   Accumulate a scalar weight into the HEALPix map for a given mass sheet
+ *   segment at the pixel corresponding to an absolute entry position.
+ *
+ * Parameters
+ *   - s          Segment index (0 .. NMassSheets-1).
+ *   - entry_pos  Absolute entry position in true Mpc (same frame as PLC).
+ *   - weight     Scalar to add to the corresponding pixel (e.g., 1.0).
+ *
+ * Behavior
+ *   - Validates segment and NSIDE; computes the pixel via
+ *     mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, &ipix).
+ *   - If the segment map exists and ipix lies within [0, MassMapNPIX), adds
+ *     'weight' to map[ipix]. Out-of-range pixels are ignored.
+ *
+ * Threading
+ *   - This helper does not perform any synchronization. Callers must ensure
+ *     either single-threaded use, per-thread private maps (later reduced), or
+ *     protect the update with an atomic/lock at the call site when sharing a
+ *     global map among threads.
+ */
 static inline void mass_maps_accumulate_entry_pos(int s,
                                                   const double entry_pos[3],
                                                   double weight)
@@ -1135,7 +1596,33 @@ static inline void mass_maps_accumulate_entry_pos(int s,
     map[ipix] += weight;
 }
 
-/* Write a single segment's HEALPix map (RING ordering) to a FITS file on task 0 */
+/**
+ * mass_maps_write_segment_map
+ * ---------------------------
+ * Purpose
+ *   Rank 0 only: write the HEALPix map for a single mass sheet segment to a
+ *   FITS file named pinocchio.<RunFlag>.massmap.seg%03d.fits.
+ *
+ * Parameters
+ *   - s  Segment index (0 .. NMassSheets-1).
+ *
+ * Behavior
+ *   - Precondition checks: only executes on task 0, with maps allocated and
+ *     MassMapNSIDE_current > 0 and MassMapNPIX > 0.
+ *   - Overwrites any existing file (CFITSIO "!" prefix).
+ *   - Two output modes controlled by MASS_MAPS_FULLSKY_OUTPUT:
+ *       • FULLSKY: IMAGE HDU of length NPIX=npix_full (RING ordering implied).
+ *       • CAP:     BINTABLE with explicit indexing (columns: PIXEL, SIGNAL)
+ *                  where PIXEL runs 0..Ncap-1 and SIGNAL holds map values.
+ *   - Adds HEALPix metadata (PIXTYPE=HEALPIX, ORDERING=RING, NSIDE, FIRSTPIX,
+ *     LASTPIX) and PLC context (APERTURE, AXISV1/2/3). If available, also
+ *     writes filter diagnostics via mass_maps_write_filter_keywords().
+ *
+ * Returns
+ *   0 on success; 1 on invalid input or CFITSIO error (error is reported to
+ *   stderr via fits_report_error). On success, prints a diagnostic line when
+ *   verbosity >= VDIAG.
+ */
 int mass_maps_write_segment_map(int s)
 {
   if (ThisTask != 0)
@@ -1272,15 +1759,40 @@ int mass_maps_write_segment_map(int s)
   return 0;
 }
 
-/*
+/**
  * mass_maps_write_sheet_table
  * ---------------------------
- * Rank 0 only: write an ASCII table describing each mass sheet to
- *   pinocchio.<RunFlag>.sheets.out
- * Columns include redshift bounds, comoving / angular diameter distances,
- * and precomputed delta / inverse spans. Intended for reproducibility and
- * external analysis tools.
- * Returns 0 on success (or if nothing to do), 1 on I/O error.
+ * Purpose
+ *   Rank 0 only: write an ASCII table describing each mass sheet (segment)
+ *   to pinocchio.<RunFlag>.sheets.out for reproducibility and external
+ *   analysis.
+ *
+ * Format
+ *   - Plain text, whitespace-separated values.
+ *   - Comment lines start with '#', including a column legend.
+ *   - File is overwritten if it already exists.
+ *
+ * Columns and units
+ *   1) id             Integer segment id (0..NMassSheets-1)
+ *   2) z_hi           Upper redshift bound (dimensionless)
+ *   3) z_lo           Lower redshift bound (dimensionless), z_hi > z_lo
+ *   4) delta_z        z_hi - z_lo
+ *   5) chi_hi         Upper comoving distance (Mpc)
+ *   6) chi_lo         Lower comoving distance (Mpc)
+ *   7) delta_chi      chi_hi - chi_lo (Mpc)
+ *   8) inv_delta_chi  1 / (chi_hi - chi_lo) (1/Mpc)
+ *   9) da_hi          Angular diameter distance at z_hi (Mpc)
+ *  10) da_lo          Angular diameter distance at z_lo (Mpc)
+ *  11) chi3_diff      chi_hi^3 - chi_lo^3 (Mpc^3)
+ *
+ * Returns
+ *   0 on success (including the no-op case when there is nothing to write),
+ *   1 on I/O error opening or writing the file.
+ *
+ * Notes
+ *   - Only task 0 writes this file; other ranks return 0 immediately.
+ *   - No MPI synchronization is performed here. The table reflects the
+ *     current in-memory MassSheets array.
  */
 int mass_maps_write_sheet_table(void)
 {
@@ -1317,19 +1829,34 @@ int mass_maps_write_sheet_table(void)
 /* Auxiliary geometry / crossing utilities (minimal version) */
 /* ---------------------------------------------------------- */
 
-/* Test if a replication radial interval overlaps sheet radial interval */
-/*
- * mass_maps_replication_overlaps_sheet
- * ------------------------------------
- * Quick radial overlap test between a replication volume and a mass sheet.
- * Replication radial interval is reconstructed from plc.repls[rep].F1 / F2
- * (stored with sign convention set during geometry build).
- * Sheet radial interval is [chi_lo, chi_hi].
- * Returns 1 if intervals intersect, else 0. Performs bounds checks.
- * NOTE: This is an approximate radial filter; angular aperture is NOT tested here.
+/**
+ * mass_maps_replication_chi_bounds
+ * --------------------------------
+ * Purpose
+ *   Compute the radial comoving distance interval [rmin, rmax] (in Mpc)
+ *   covered by a replication volume, using its stored scale factors F1, F2
+ *   (where F = 1 + z) from plc.repls[].
+ *
+ * Parameters
+ *   - rep_id  Replication index (0 .. plc.Nreplications-1). Must be valid.
+ *   - rmin    Output pointer; receives the smaller of the two chi values.
+ *   - rmax    Output pointer; receives the larger of the two chi values.
+ *
+ * Behavior
+ *   - Converts F1,F2 to redshifts z1=F1-1 and z2=F2-1, then clamps negatives
+ *     to zero (z<0 -> z=0).
+ *   - Maps each z to comoving distance via ComovingDistance(z) and orders the
+ *     results so that rmin <= rmax regardless of input ordering.
+ *
+ * Returns
+ *   void. rmin and rmax must be non-NULL.
+ *
+ * Notes
+ *   - Units: returns distances in Mpc (comoving).
+ *   - If z1 == z2, then rmin == rmax.
+ *   - This helper performs no bounds checks on rep_id and assumes plc.repls
+ *     has been initialized.
  */
-
-/* Return replication radial chi bounds via stored scale factors (1+z) */
 static inline void mass_maps_replication_chi_bounds(int rep_id, double *rmin, double *rmax)
 {
   double F1 = plc.repls[rep_id].F1;
@@ -1354,7 +1881,42 @@ static inline void mass_maps_replication_chi_bounds(int rep_id, double *rmin, do
   }
 }
 
-/* Build list of replications whose chi interval overlaps this segment chi span */
+/**
+ * mass_maps_select_segment_replications
+ * -------------------------------------
+ * Purpose
+ *   Build the list of replication indices whose radial comoving-distance
+ *   interval [rmin, rmax] overlaps the current segment's chi span. This is a
+ *   coarse radial prefilter; angular aperture culling is performed later per
+ *   block using tighter bounds.
+ *
+ * Parameters
+ *   - segment_index  Index into the ScaleDep outputs defining segment bounds.
+ *                    Segment spans between ScaleDep.z[segment_index-1] (prev)
+ *                    and ScaleDep.z[segment_index] (curr). For segment 0 or
+ *                    invalid indices, the function returns early.
+ *
+ * Behavior
+ *   - Computes chi_prev=ComovingDistance(z_prev) and chi_curr likewise, then
+ *     sets seg_chi_min/max as the ordered pair.
+ *   - Ensures the replication list buffer has capacity plc.Nreplications
+ *     (realloc as needed). On allocation failure, logs a warning (task 0) and
+ *     returns without populating the list.
+ *   - For each replication r, obtains [rmin,rmax] via
+ *     mass_maps_replication_chi_bounds(r, &rmin, &rmax) and appends r if the
+ *     intervals overlap (rmax >= seg_chi_min && rmin <= seg_chi_max).
+ *   - Updates the globals MassMapSegmentReplications (array of indices) and
+ *     MassMapSegmentReplicationCount.
+ *
+ * Returns
+ *   void. The replication candidate list reflects radial overlap only.
+ *
+ * Notes
+ *   - Units: chi values are in Mpc (comoving). ComovingDistance increases with
+ *     z, so when ScaleDep.z is in descending order, chi_prev > chi_curr.
+ *   - Angular aperture filtering and per-block AABB tests are applied later
+ *     in the block-processing loop to further reduce candidates.
+ */
 static void mass_maps_select_segment_replications(int segment_index)
 {
   MassMapSegmentReplicationCount = 0;
@@ -1402,18 +1964,36 @@ static void mass_maps_select_segment_replications(int segment_index)
 /* ---------------------------------------------------------- */
 /* Displacement / position helpers                             */
 /* ---------------------------------------------------------- */
-/*
+/**
  * mass_maps_compute_prev_curr_positions
  * -------------------------------------
- * For a given particle (pos_data), build its Eulerian positions at the
- * previous segment endpoint and at the current segment endpoint, using the
- * stored displacement components (v_prev / v and higher LPT orders) when
- * RECOMPUTE_DISPLACEMENTS is active. These correspond to the two snapshots
- * between which we test for PLC entry. The order argument controls how many
- * LPT orders to include (1,2,3).
+ * Purpose
+ *   Build Eulerian positions for a particle at the previous and current
+ *   segment endpoints from its stored LPT displacements, producing two
+ *   absolute positions in physical units (true Mpc).
  *
- * NOTE: Replication shifts are NOT applied here; caller adds them per
- * replication. Periodic wrapping is also left to the caller if required.
+ * Parameters
+ *   - p          Pointer to pos_data with LPT displacement components.
+ *   - pos_prev   Output array [3]; receives position at previous endpoint.
+ *   - pos_curr   Output array [3]; receives position at current endpoint.
+ *   - order      LPT order to include: 1, 2 (requires TWO_LPT), or 3
+ *                (requires TWO_LPT and THREE_LPT). Higher terms are summed
+ *                into both prev and curr as available.
+ *
+ * Behavior
+ *   - Forms endpoint displacements by selecting per-endpoint components:
+ *       prev: q + (v_prev [+ v2_prev [+ v31_prev + v32_prev]])
+ *       curr: q + (v      [+ v2      [+ v31      + v32     ]])
+ *   - Scales both positions from lattice units (cells) to physical box units
+ *     using params.InterPartDist (true Mpc).
+ *
+ * Returns
+ *   void. Outputs are written to pos_prev and pos_curr.
+ *
+ * Notes
+ *   - Requires RECOMPUTE_DISPLACEMENTS (enforced for MASS_MAPS at compile time).
+ *   - Replication shifts are NOT applied here; callers add them per replication.
+ *   - Periodic wrapping, if desired, is also the caller's responsibility.
  */
 static inline void mass_maps_compute_prev_curr_positions(const pos_data *p,
                                                          double pos_prev[3],
@@ -1456,14 +2036,41 @@ static inline void mass_maps_compute_prev_curr_positions(const pos_data *p,
 /* ---------------------------------------------------------- */
 /* Build pos_data from products (FFT local tile, global coords) */
 /* ---------------------------------------------------------- */
-/*
+/**
  * mass_maps_set_point_from_products_global
  * ----------------------------------------
- * Build a pos_data object for a particle addressed by its GLOBAL lattice
- * coordinates (ig,jg,kg), reading displacement components from products[]
- * at the current task's FFT tile. F is the scale factor (1+z) for the
- * current segment endpoint. q[] is set in GLOBAL lattice units (ig+SHIFT,...).
- * Caller must ensure (ig,jg,kg) lies inside this task's FFT tile.
+ * Purpose
+ *   Populate a pos_data object for a particle referenced by its GLOBAL lattice
+ *   coordinates (ig, jg, kg), loading displacement components from the
+ *   products[] array on this task's FFT tile.
+ *
+ * Parameters
+ *   - ig, jg, kg  Global lattice coordinates of the particle.
+ *   - F           Scale factor (F = 1 + z) for the current segment endpoint.
+ *   - myobj       Output pos_data to fill.
+ *
+ * Behavior
+ *   - Translates global (ig,jg,kg) to local tile indices using MyGrids[0].
+ *     If out of range, marks myobj->M=0 and returns (no data).
+ *   - Sets myobj fields:
+ *       z = F - 1;
+ *       myk = Smoothing.k_GM_displ[last] (SCALE_DEPENDENT) or params.k_for_GM;
+ *       weight via set_weight(myobj);
+ *       M = 1;
+ *       q[] = (ig+SHIFT, jg+SHIFT, kg+SHIFT) in GLOBAL lattice units;
+ *       v[], and when enabled v2[], v31[], v32[] from products[idx];
+ *       if RECOMPUTE_DISPLACEMENTS: v_prev[] and optionally v2_prev[],
+ *       v31_prev[], v32_prev[].
+ *
+ * Returns
+ *   void. On out-of-range indices, myobj is marked empty (M=0).
+ *
+ * Notes
+ *   - q[] remains in lattice units; conversion to physical units is performed
+ *     later when building Eulerian positions. Replication shifts are not
+ *     applied here.
+ *   - Caller is responsible for supplying a valid (ig,jg,kg) within this
+ *     task's FFT tile when data is expected.
  */
 static inline void mass_maps_set_point_from_products_global(int ig, int jg, int kg,
                                                             PRODFLOAT F,
@@ -1537,7 +2144,26 @@ static inline void mass_maps_set_point_from_products_global(int ig, int jg, int 
 #endif
 }
 
-/* Accessor for per-particle collapse redshift ZACC using global lattice coords */
+/**
+ * mass_maps_get_zacc_global
+ * -------------------------
+ * Purpose
+ *   Access the per-particle collapse redshift (ZACC) from the products array
+ *   using GLOBAL lattice coordinates (ig, jg, kg) on this task's FFT tile.
+ *
+ * Parameters
+ *   - ig, jg, kg  Global lattice indices of the particle.
+ *
+ * Returns
+ *   The collapse redshift zacc as a double if the coordinates map inside this
+ *   task's local tile; otherwise returns a large negative sentinel (-1e30)
+ *   indicating "never collapsed / out of range".
+ *
+ * Notes
+ *   - No MPI: caller must ensure the queried site resides on this rank if a
+ *     valid value is expected.
+ *   - Available only when SNAPSHOT is defined.
+ */
 #if defined(SNAPSHOT)
 static inline double mass_maps_get_zacc_global(int ig, int jg, int kg)
 {
@@ -1551,6 +2177,30 @@ static inline double mass_maps_get_zacc_global(int ig, int jg, int kg)
 }
 
 /* Accessor for per-particle group_ID using global lattice coords (0 if none) */
+/**
+ * mass_maps_get_group_id_global
+ * -----------------------------
+ * Purpose
+ *   Return the group_ID assigned to the particle at GLOBAL lattice
+ *   coordinates (ig, jg, kg) on this task's FFT tile. If the coordinates are
+ *   outside this tile, returns 0.
+ *
+ * Parameters
+ *   - ig, jg, kg  Global lattice indices of the particle.
+ *
+ * Returns
+ *   Integer group_ID for the particle (0 if none or if out of range).
+ *
+ * Behavior
+ *   - Translates global to local indices using MyGrids[0]. If any index is
+ *     outside the local tile bounds, returns 0.
+ *   - Otherwise, loads products[idx].group_ID and returns it.
+ *
+ * Notes
+ *   - Available only when SNAPSHOT is defined.
+ *   - Caller must ensure that the queried (ig,jg,kg) lies on this task's tile
+ *     when a non-zero ID is expected; no MPI communication occurs here.
+ */
 static inline int mass_maps_get_group_id_global(int ig, int jg, int kg)
 {
   int li = ig - (int)MyGrids[0].GSstart[_x_];
@@ -1563,30 +2213,39 @@ static inline int mass_maps_get_group_id_global(int ig, int jg, int kg)
 }
 #endif
 
-/* Determine if particle changed sign (outside->inside) between previous & current displacement states for a replication.
-   Inputs are Eulerian displacements already (prev & curr) relative to q (Lagrangian) plus replication shift via rep indices. */
-/*
+/**
  * mass_maps_particle_sign_change
  * ------------------------------
- * Test whether a particle (given previous & current displacement states) enters
- * the PLC cone during the latest segment for a specific replication.
+ * Test whether a particle leaves the PLC cone during the latest segment for a
+ * specific replication, using H(z, r) = chi(z) - r with chi the comoving
+ * distance to redshift and r the distance to the PLC center. A crossing is
+ * detected when H_prev > 0 and H_curr <= 0 (inside -> outside across the
+ * segment).
  *
  * Inputs:
  *   rep_id      - replication index
- *   q[3]        - base (Lagrangian) position of particle
+ *   q[3]        - base (Lagrangian) particle position
  *   disp_prev   - previous total Eulerian displacement vector
  *   disp_curr   - current total Eulerian displacement vector
+ *   z_prev      - previous redshift (used to compute chi_prev)
+ *   z_curr      - current redshift  (used to compute chi_curr)
  *   alpha_out   - (optional) on success, fraction in [0,1] from previous to current state
  *   entry_pos   - (optional) interpolated Eulerian position at crossing
  *
+ * Notes:
+ *   - If q == (0,0,0), disp_* are interpreted as absolute Eulerian positions.
+ *     Otherwise positions are q + disp_*.
+ *   - Replication shift equals (i,j,k) times the global box size in each axis.
+ *
  * Logic:
  *   1. Build previous and current replicated positions.
- *   2. Compute F_prev, F_curr.
- *   3. Detect sign change (outside -> inside: F_prev < 0, F_curr >= 0).
- *   4. Linear interpolation alpha = -F_prev / (F_curr - F_prev); clamp to [0,1].
- * Skips ambiguous cases where |ΔF| < MASS_MAPS_F_EPS.
+ *   2. Compute r_prev, r_curr and chi_prev=ComovingDistance(z_prev), chi_curr.
+ *   3. H_prev = chi_prev - r_prev, H_curr = chi_curr - r_curr.
+ *   4. Crossing when H_prev > 0 and H_curr <= 0.
+ *   5. Interpolate alpha = H_prev / (H_prev - H_curr); clamp to [0,1].
+ *      Skip ambiguous cases where |H_prev - H_curr| < MASS_MAPS_F_EPS.
  *
- * Returns 1 if a valid crossing detected, else 0.
+ * Returns 1 if a crossing is detected per the above condition, else 0.
  */
 int mass_maps_particle_sign_change(int rep_id,
                                    const double q[3],
@@ -1630,7 +2289,7 @@ int mass_maps_particle_sign_change(int rep_id,
     pos_curr[2] = q[2] + disp_curr[2] + shift[2];
   }
 
-  /* New crossing logic (user condition):
+  /* Crossing logic:
      Define H_prev = chi_prev - r_prev and H_curr = chi_curr - r_curr.
      Crossing occurs if H_prev > 0 and H_curr <= 0. Estimate alpha by
      linear interpolation of H between the two endpoints. */
@@ -1646,13 +2305,13 @@ int mass_maps_particle_sign_change(int rep_id,
   double H_prev = chi_prev - r_prev;
   double H_curr = chi_curr - r_curr;
 
-  /* Early exit if no crossing according to the user's condition */
+  /* Early exit if no crossing according to crossing condition */
   if (!(H_prev > 0.0 && H_curr <= 0.0))
   {
     static int sanity_no_cross_prints = 0;
     if (!ThisTask && internal.verbose_level >= VDIAG && sanity_no_cross_prints < 10)
     {
-      printf("MASS_MAPS SANITY(no-entry, user): rep=%d z_prev=%.3f z_curr=%.3f H_prev=% .3e H_curr=% .3e r_prev=%.2f r_curr=%.2f chi_prev=%.2f chi_curr=%.2f\n",
+      printf("MASS_MAPS SANITY(no-entry): rep=%d z_prev=%.3f z_curr=%.3f H_prev=% .3e H_curr=% .3e r_prev=%.2f r_curr=%.2f chi_prev=%.2f chi_curr=%.2f\n",
              rep_id, z_prev, z_curr, H_prev, H_curr, r_prev, r_curr, chi_prev, chi_curr);
       sanity_no_cross_prints++;
     }
@@ -1674,7 +2333,7 @@ int mass_maps_particle_sign_change(int rep_id,
     static int sanity_cross_prints = 0;
     if (!ThisTask && internal.verbose_level >= VDIAG && sanity_cross_prints < 10)
     {
-      printf("MASS_MAPS SANITY(entry, user): rep=%d z_prev=%.3f z_curr=%.3f H_prev=% .3e H_curr=% .3e alpha=%.3f r_prev=%.2f r_curr=%.2f\n",
+      printf("MASS_MAPS SANITY(entry): rep=%d z_prev=%.3f z_curr=%.3f H_prev=% .3e H_curr=% .3e alpha=%.3f r_prev=%.2f r_curr=%.2f\n",
              rep_id, z_prev, z_curr, H_prev, H_curr, alpha, r_prev, r_curr);
       sanity_cross_prints++;
     }
@@ -1691,30 +2350,62 @@ int mass_maps_particle_sign_change(int rep_id,
 }
 
 /* ---------------------------------------------------------- */
-/* Orchestrator (skeleton)                                    */
+/* Orchestrator                                               */
 /* ---------------------------------------------------------- */
-/*
- * mass_maps_process_segment (SKELETON)
- * -----------------------------------
- * Called once per fragmentation segment immediately AFTER build_groups()
- * when both previous and current displacement states are in memory and
- * group membership for the current segment has been established.
+/**
+ * mass_maps_process_segment
+ * -------------------------
+ * Orchestrate mass-map accumulation for one fragmentation segment using the
+ * "products" path (positions reconstructed from products and LPT displacements).
  *
- * Responsibilities (future implementation plan):
- *   1. Lazy allocate / sanity-check mass map accumulation arrays.
- *   2. Build per-particle halo membership mask (in-halo vs field).
- *   3. Determine candidate replication list per sheet (radial prune).
- *   4. Loop particles:
- *        - For each relevant replication, test sign change
- *          (mass_maps_particle_sign_change) for PLC entry.
- *        - If crossing, interpolate entry position, locate sheet
- *          (via MassMapBoundaryChi), compute HEALPix pixel, and
- *          accumulate to total / halo / field counters.
- *   5. (Deferred) Optionally accumulate ancillary stats (e.g. z_entry histogram).
- *   6. Defer MPI reduction & FITS output until all segments processed.
+ * Parameters:
+ *   segment_index     - current segment index in [1..NMassSheets]; map index is s_map=segment_index-1
+ *   z_segment         - redshift of the current segment (typically ScaleDep.z[segment_index])
+ *   is_first_segment  - non-zero for the first segment; no crossings are computed and the function returns early
  *
- * Current skeleton: only guards and verbose diagnostic (rank 0).
- */
+ * Behavior:
+ *   - Lazy allocation: on first invocation, allocate HEALPix maps for all sheets
+ *     if params.MassMapNSIDE>0 (RING ordering).
+ *   - Optional filter refresh: if MASS_MAPS_FILTER_UNCOLLAPSED and SNAPSHOT are defined,
+ *     call distribute_back() so products[].zacc and products[].group_ID reflect current
+ *     memberships before filtering/diagnostics; prints coverage diagnostics at VDBG.
+ *   - Select replication candidates whose shifted Lagrangian AABBs overlap the segment
+ *     in comoving distance (radial prune only).
+ *   - Compute segment chi bounds and precompute per-candidate replication shifts
+ *     in physical units (true Mpc).
+ *   - Optional Lagrangian culling: if MASS_MAPS_BLOCKS_* > 0, split the local tile into
+ *     blocks; build a padded AABB (variable pad in true Mpc via MASS_MAPS_VARPAD_FACTOR)
+ *     and cull by radial [dmin,dmax] vs [chi_min,chi_max] and a conservative angular
+ *     bound against the PLC aperture; reuse cached prev/curr positions per block; optionally
+ *     use per-thread LocalMap (MASS_MAPS_THREAD_ACCUM) to reduce atomic contention.
+ *   - For each particle and passing replication:
+ *       • Build previous and current Eulerian positions (mass_maps_compute_prev_curr_positions),
+ *         apply replication shift.
+ *       • Detect PLC boundary crossing inside the segment using
+ *         mass_maps_crossing_from_shifted_positions with H=chi−r predicate.
+ *       • Check angular aperture; optionally filter for uncollapsed-only (ZPLC>ZACC).
+ *       • Accumulate one count into the HEALPix pixel of the entry position for sheet s_map.
+ *   - Diagnostics: track per-rep and total entries; optional endpoint displacement vs buffer
+ *     stats on the last segment; filter diagnostics and optional matching diagnostics.
+ *   - MPI reductions: reduce per-rep counts and the segment map to rank 0, which writes the
+ *     FITS file via mass_maps_write_segment_map(s_map) and prints map stats at VDBG.
+ *
+ * Threading and MPI:
+ *   - OpenMP over blocks (when enabled); per-pixel updates use atomics or thread-local maps
+ *     merged once per block. All ranks compute local contributions; rank 0 performs I/O.
+ *
+ * Units and conventions:
+ *   - Positions and shifts are in true Mpc (InterPartDist units). ComovingDistance maps z→chi.
+ *   - HEALPix uses RING ordering; aperture is in degrees. Map index s_map = segment_index-1.
+ *
+ * Early exits:
+ *   - Feature disabled or not initialized (NMassSheets<=0 or params.MassMapNSIDE<=0).
+ *   - First segment (no previous state to form crossings): returns immediately.
+ *
+ * Side effects:
+ *   - Allocates global map storage on first use; persists across segments until freed by
+ *     mass_maps_free_maps(). Updates global diagnostics used in FITS headers when filtering.
+ **/
 void mass_maps_process_segment(int segment_index, double z_segment, int is_first_segment)
 {
   /* Ensure ZACC values are available in products when filtering uncollapsed-only */
