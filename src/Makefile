@@ -47,13 +47,10 @@ OMP   = YES
 #   understand what each directive does and when to activate it.
 # - The default profile here matches a typical PLC + mass-maps run with SNAPSHOT.
 #
-# LPT order and threading helpers
+# LPT order
 # -DTWO_LPT, -DTHREE_LPT        Include 2LPT / 3LPT displacement terms.
-# -DMASS_MAPS_THREAD_ACCUM      Use per-thread HEALPix accumulators to reduce atomics.
-
 OPTIONS += -DTWO_LPT
 OPTIONS += -DTHREE_LPT
-OPTIONS += -DMASS_MAPS_THREAD_ACCUM
 
 # PLC + Mass Maps pipeline
 # -DPLC                        Enable past light-cone geometry and basis.
@@ -61,26 +58,22 @@ OPTIONS += -DMASS_MAPS_THREAD_ACCUM
 # -DHAVE_CFITSIO               Enable FITS output via CFITSIO.
 # -DMASS_MAPS_FILTER_UNCOLLAPSED  Keep only entries with ZPLC>ZACC (requires SNAPSHOT).
 # -DDISP_HISTOGRAM             Emit optional endpoint displacement histograms (debug/analysis).
-
+# -DMASS_MAPS_THREAD_ACCUM      Use per-thread HEALPix accumulators to reduce atomics.
 OPTIONS += -DPLC
 OPTIONS += -DMASS_MAPS
 OPTIONS += -DHAVE_CFITSIO
 OPTIONS += -DMASS_MAPS_FILTER_UNCOLLAPSED  # ZPLC>ZACC (requires SNAPSHOT)
 OPTIONS += -DDISP_HISTOGRAM
+OPTIONS += -DMASS_MAPS_THREAD_ACCUM
 
 # Triaxial collapse model (choose one)
 # -DELL_CLASSIC                 Classic ellipsoidal collapse.
 # -DELL_SNG                    Spherical-no-gravity approximation.
 # -DTABULATED_CT               Use tabulated collapse times.
-
 OPTIONS += -DELL_CLASSIC
-# OPTIONS += -DELL_SNG
-# OPTIONS += -DTABULATED_CT
 
 # Group building and fragmentation
 # -DCLASSIC_FRAGMENTATION       Use classic fragmentation instead of default.
-
-# OPTIONS += -DCLASSIC_FRAGMENTATION
 
 # Output and products
 # -DSNAPSHOT                    Populate products[] (zacc, group_ID, displacements, etc.).
@@ -88,11 +81,7 @@ OPTIONS += -DELL_CLASSIC
 # -DLIGHT_OUTPUT                Reduced output footprint.
 # -DLONGIDS                     Use 64-bit particle IDs.
 # -DDOUBLE_PRECISION_PRODUCTS   Store products in double precision.
-
 OPTIONS += -DSNAPSHOT
-# OPTIONS += -DLIGHT_OUTPUT
-# OPTIONS += -DLONGIDS
-# OPTIONS += -DDOUBLE_PRECISION_PRODUCTS
 
 # Beyond LambdaCDM models
 # Neutrinos and scale-dependent growth:
@@ -107,21 +96,12 @@ OPTIONS += -DSNAPSHOT
 # f(R) gravity:
 # -DMOD_GRAV_FR                 Enable modified gravity model (f(R)).
 # -DFR0=1.e-8                   Example FR parameter value.
-
-#OPTIONS += -DSCALE_DEPENDENT
-#OPTIONS += -DREAD_PK_TABLE
 OPTIONS += -DRECOMPUTE_DISPLACEMENTS
 OPTIONS += -DREAD_HUBBLE_TABLE
-#OPTIONS += -DMASS_MAPS_MATCH_DIAG
-# OPTIONS += -DMOD_GRAV_FR
-# OPTIONS += -DFR0=1.e-8
 
 # Other options
 # -DWHITENOISE                  White-noise ICs.
 # -DNORADIATION                 Neglect radiation component.
-
-# OPTIONS += -DWHITENOISE
-# OPTIONS += -DNORADIATION
 
 ########## Preprocessor Definitions end ########## 
 
@@ -336,5 +316,3 @@ docs:
 
 docs-clean:
 	@rm -rf $(DOCDIR)/build
-
-
