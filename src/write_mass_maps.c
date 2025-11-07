@@ -711,11 +711,22 @@ double *MassMapBoundaryDA = NULL;
 static int MassMapNSIDE_current = 0;
 static long MassMapNPIX = 0;
 static double *MassMapSegmentMaps = NULL; /* length = NMassSheets * MassMapNPIX */
-/* Diagnostics for cap prefix boundary investigation */
+/* Optional diagnostics for cap prefix boundary investigation */
+#ifndef MASS_MAPS_CAP_DIAG
+#define MASS_MAPS_CAP_DIAG 0
+#endif
+#if MASS_MAPS_CAP_DIAG
 static unsigned long long MassMapCapPrefixMiss = 0ULL; /* entries inside aperture but ipix >= Ncap */
 static double MassMapCapMissAngleMax = 0.0;            /* max angle (deg) among missed pixels */
 static double MassMapCapAcceptAngleMax = 0.0;          /* max angle (deg) among accepted pixels */
 static int MassMapCapDiagActive = 1;                   /* enable instrumentation (set 0 to disable) */
+#else
+/* Stubs to satisfy references when diagnostics are disabled; optimized out at runtime */
+#define MassMapCapDiagActive 0
+static unsigned long long MassMapCapPrefixMiss = 0ULL;
+static double MassMapCapMissAngleMax = 0.0;
+static double MassMapCapAcceptAngleMax = 0.0;
+#endif
 
 static double *MassMapReduceBuffer = NULL; /* root-only temporary buffer for reductions */
 /* Per-segment replication candidate list (radial overlap with segment chi span) */
@@ -972,12 +983,14 @@ int mass_maps_init_sheets(void)
       MassSheet *ms = &MassSheets[s];
 
       /* After traversal, print cap prefix diagnostics once per segment (root only) */
+#if MASS_MAPS_CAP_DIAG
       if (!ThisTask && MassMapCapDiagActive && internal.verbose_level >= VDIAG && params.PLCAperture < 180.0 && MassMapNSIDE_current > 0)
       {
         double A = params.PLCAperture;
         printf("[%s] MASS_MAPS DIAG: aperture=%.2f deg accept_max_angle=%.3f deg miss_max_angle=%.3f deg prefix_miss=%llu\n",
                fdate(), A, MassMapCapAcceptAngleMax, MassMapCapMissAngleMax, MassMapCapPrefixMiss);
       }
+#endif
       printf("  sheet %3d: z_hi=%8.4f z_lo=%8.4f Δz=%8.4f chi_hi=%10.4f chi_lo=%10.4f Δchi=%10.4f\n", s, ms->z_hi, ms->z_lo, ms->delta_z, ms->chi_hi, ms->chi_lo, ms->delta_chi);
     }
   }
@@ -2494,9 +2507,11 @@ int mass_maps_particle_sign_change(int rep_id,
 void mass_maps_process_segment(int segment_index, double z_segment, int is_first_segment)
 {
   /* Reset cap diagnostics per segment */
+#if MASS_MAPS_CAP_DIAG
   MassMapCapPrefixMiss = 0ULL;
   MassMapCapMissAngleMax = 0.0;
   MassMapCapAcceptAngleMax = 0.0;
+#endif
 
   /* Ensure ZACC values are available in products when filtering uncollapsed-only */
 #if defined(MASS_MAPS_FILTER_UNCOLLAPSED)
@@ -2896,8 +2911,9 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
               if (!axis_pierces)
               {
                 double max_corner_cos = -1.0; /* track maximum corner cosine */
-                for (int ax = 0; ax < 2; ++ax)
-                  for (int ay = 0; ay < 2; ++ay)
+                int early_accept = 0;
+                for (int ax = 0; ax < 2 && !early_accept; ++ax)
+                  for (int ay = 0; ay < 2 && !early_accept; ++ay)
                     for (int az = 0; az < 2; ++az)
                     {
                       double rc[3] = {
@@ -2912,10 +2928,12 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                       if (cosv > max_corner_cos)
                         max_corner_cos = cosv;
                       if (max_corner_cos > cosA)
-                        goto ANG_DONE; /* early accept */
+                      {
+                        early_accept = 1; /* no rejection possible */
+                        break;
+                      }
                     }
-              ANG_DONE:;
-                if (max_corner_cos <= cosA)
+                if (!early_accept && max_corner_cos <= cosA)
                   angular_pass = 0; /* all corners outside spherical cap */
               }
             }
@@ -3113,6 +3131,7 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                           if (MassMapCapDiagActive)
                           {
                             double ang = mass_maps_angle_deg_from_pos(entry_pos);
+#if MASS_MAPS_CAP_DIAG
 #ifdef _OPENMP
 #pragma omp critical
 #endif
@@ -3120,6 +3139,7 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                               if (ang > MassMapCapAcceptAngleMax)
                                 MassMapCapAcceptAngleMax = ang;
                             }
+#endif
                           }
                           if (LocalMap)
                           {
@@ -3140,6 +3160,7 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                           if (MassMapCapDiagActive)
                           {
                             double ang = mass_maps_angle_deg_from_pos(entry_pos);
+#if MASS_MAPS_CAP_DIAG
                         /* Track misses inside aperture but outside prefix */
 #ifdef _OPENMP
 #pragma omp atomic update
@@ -3152,6 +3173,7 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                               if (ang > MassMapCapMissAngleMax)
                                 MassMapCapMissAngleMax = ang;
                             }
+#endif
                           }
                         }
                       }
@@ -3303,6 +3325,7 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                           if (MassMapCapDiagActive)
                           {
                             double ang = mass_maps_angle_deg_from_pos(entry_pos);
+#if MASS_MAPS_CAP_DIAG
 #ifdef _OPENMP
 #pragma omp critical
 #endif
@@ -3310,6 +3333,7 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                               if (ang > MassMapCapAcceptAngleMax)
                                 MassMapCapAcceptAngleMax = ang;
                             }
+#endif
                           }
                         }
                         else
@@ -3318,6 +3342,7 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                           if (MassMapCapDiagActive)
                           {
                             double ang = mass_maps_angle_deg_from_pos(entry_pos);
+#if MASS_MAPS_CAP_DIAG
 #ifdef _OPENMP
 #pragma omp atomic update
 #endif
@@ -3329,6 +3354,7 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                               if (ang > MassMapCapMissAngleMax)
                                 MassMapCapMissAngleMax = ang;
                             }
+#endif
                           }
                         }
                       }

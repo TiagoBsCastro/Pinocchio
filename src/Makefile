@@ -43,60 +43,66 @@ OMP   = YES
 #
 # How to use:
 # - Edit the OPTIONS += -D<FLAG> lines below to enable/disable features.
-# - These map to the explanatory parameters in the code and docs, so users can
-#   understand what each directive does and when to activate it.
-# - The default profile here matches a typical PLC + mass-maps run with SNAPSHOT.
+# - These options enable/disable code paths at compile time. Choose what you need
+#   for your run to reduce binary size and keep hot loops lean.
+# - The default profile here matches a typical Past Light-Cone (PLC) + Mass Maps
+#   run with snapshots and FITS output.
 #
-# LPT order
-# -DTWO_LPT, -DTHREE_LPT        Include 2LPT / 3LPT displacement terms.
+# LPT order (displacement field accuracy)
+# -DTWO_LPT                    Include second-order LPT term.
+# -DTHREE_LPT                  Include third-order LPT term (adds cost).
 OPTIONS += -DTWO_LPT
 OPTIONS += -DTHREE_LPT
 
 # PLC + Mass Maps pipeline
-# -DPLC                        Enable past light-cone geometry and basis.
-# -DMASS_MAPS                  Enable per-segment PLC entry accumulation to HEALPix maps.
-# -DHAVE_CFITSIO               Enable FITS output via CFITSIO.
-# -DMASS_MAPS_FILTER_UNCOLLAPSED  Keep only entries with ZPLC>ZACC (requires SNAPSHOT).
-# -DDISP_HISTOGRAM             Emit optional endpoint displacement histograms (debug/analysis).
-# -DMASS_MAPS_THREAD_ACCUM      Use per-thread HEALPix accumulators to reduce atomics.
+# -DPLC                        Enable past light-cone geometry and basis vectors.
+# -DMASS_MAPS                  Build per-segment HEALPix maps counting PLC entries.
+# -DHAVE_CFITSIO               Write FITS files (requires CFITSIO installed).
+# -DMASS_MAPS_FILTER_UNCOLLAPSED  Keep only entries with Z_PLC > Z_ACC (requires SNAPSHOT).
+# -DMASS_MAPS_THREAD_ACCUM     Use per-thread HEALPix accumulators to reduce atomics.
+# -DDISP_HISTOGRAM             Optional: write displacement magnitude histograms (debug/QA).
 OPTIONS += -DPLC
 OPTIONS += -DMASS_MAPS
 OPTIONS += -DHAVE_CFITSIO
-OPTIONS += -DMASS_MAPS_FILTER_UNCOLLAPSED  # ZPLC>ZACC (requires SNAPSHOT)
-OPTIONS += -DDISP_HISTOGRAM
+OPTIONS += -DMASS_MAPS_FILTER_UNCOLLAPSED  # Z_PLC > Z_ACC (requires SNAPSHOT)
+# OPTIONS += -DDISP_HISTOGRAM               # Enable only when you need displacement QA
 OPTIONS += -DMASS_MAPS_THREAD_ACCUM
-OPTIONS += -DMASS_MAPS_NCAP_VERIFY
+
+# Mass-maps diagnostics (compile-time)
+# -DMASS_MAPS_CAP_DIAG=1        Enable cap prefix diagnostics (off by default)
+#   Tracks max accepted/missed angles and prefix misses; useful for aperture QA.
+# OPTIONS += -DMASS_MAPS_CAP_DIAG=1
 
 # Triaxial collapse model (choose one)
-# -DELL_CLASSIC                 Classic ellipsoidal collapse.
+# -DELL_CLASSIC                Classic ellipsoidal collapse model (default).
 # -DELL_SNG                    Spherical-no-gravity approximation.
-# -DTABULATED_CT               Use tabulated collapse times.
+# -DTABULATED_CT               Use tabulated collapse times from file.
 OPTIONS += -DELL_CLASSIC
 
 # Group building and fragmentation
 # -DCLASSIC_FRAGMENTATION       Use classic fragmentation instead of default.
 
 # Output and products
-# -DSNAPSHOT                    Populate products[] (zacc, group_ID, displacements, etc.).
-#                               Required by MASS_MAPS_FILTER_UNCOLLAPSED.
-# -DLIGHT_OUTPUT                Reduced output footprint.
-# -DLONGIDS                     Use 64-bit particle IDs.
-# -DDOUBLE_PRECISION_PRODUCTS   Store products in double precision.
+# -DSNAPSHOT                   Populate products[] (z_acc, group_ID, displacements, etc.).
+#                              Required by MASS_MAPS_FILTER_UNCOLLAPSED.
+# -DLIGHT_OUTPUT               Reduce output footprint.
+# -DLONGIDS                    Use 64-bit particle IDs.
+# -DDOUBLE_PRECISION_PRODUCTS  Store products in double precision.
 OPTIONS += -DSNAPSHOT
 
-# Beyond LambdaCDM models
+# Beyond ΛCDM and solver options
 # Neutrinos and scale-dependent growth:
-# -DSCALE_DEPENDENT             Enable k-dependent growth (recompute via FFT per segment).
-# -DREAD_PK_TABLE               Read external P(k) table (implies scale dependence).
+# -DSCALE_DEPENDENT            Enable k-dependent growth (FFT per segment).
+# -DREAD_PK_TABLE              Read external P(k) table (implies scale dependence).
 #
 # Displacement engine:
-# -DRECOMPUTE_DISPLACEMENTS     Maintain prev/curr segment fields (required for mass-maps crossings).
-# -DREAD_HUBBLE_TABLE           Read H(z) table for precise distances.
-# -DMASS_MAPS_MATCH_DIAG        Extra cross-matching diagnostics (PLC groups vs filter decisions).
+# -DRECOMPUTE_DISPLACEMENTS    Maintain prev/curr segment fields (needed for PLC crossings).
+# -DREAD_HUBBLE_TABLE          Read H(z) table for precise distances.
+# -DMASS_MAPS_MATCH_DIAG       Extra cross-matching diagnostics (debug).
 #
 # f(R) gravity:
-# -DMOD_GRAV_FR                 Enable modified gravity model (f(R)).
-# -DFR0=1.e-8                   Example FR parameter value.
+# -DMOD_GRAV_FR                Enable modified gravity model (f(R)).
+# -DFR0=1.e-8                  Example FR parameter value.
 OPTIONS += -DRECOMPUTE_DISPLACEMENTS
 OPTIONS += -DREAD_HUBBLE_TABLE
 
@@ -238,6 +244,32 @@ PMT_INCL    = -I$(PMT)/include
 
 endif
 
+ifeq ($(SYSTYPE), "LeonardoDCGP")
+
+CC          =  mpicc
+CDEBUG      = -ggdb3 -Wall $(OMP_FLAG)
+COPTIMIZED  = -O3 -Wno-unused-result $(OMP_FLAG)
+
+FFTW_LIBR   = -L$(FFTW_LIB) -lfftw3_mpi -lfftw3 $(OMP_FFTW)
+FFTW_INCL   = -I$(FFTW_INC)
+
+GSL_LIBR    = -L$(GSL_LIB) -lgsl -lgslcblas -lm
+GSL_INCL    = -I$(GSL_INC)
+
+PFFT_ROOT   = /leonardo_scratch/large/userexternal/tbatalha/Pinocchio/dep/
+PFFT_LIBR   = -L$(PFFT_ROOT)/lib -lpfft
+PFFT_INCL   = -I$(PFFT_ROOT)/include
+
+HEALPIX_ROOT = /leonardo_scratch/large/userexternal/tbatalha/Pinocchio/dep/Healpix_3.83/
+CFITSIO_ROOT = /leonardo_scratch/large/userexternal/tbatalha/Pinocchio/dep/
+
+HEALPIX_INCL = -I$(HEALPIX_ROOT)/include
+HEALPIX_LIBR = -L$(HEALPIX_ROOT)/lib -lchealpix
+
+CFITSIO_INCL = -I$(CFITSIO_ROOT)/include
+CFITSIO_LIBR = -L$(CFITSIO_ROOT)/lib -lcfitsio
+
+endif
 
 ########## System-specific Configuration end ########## 
 
