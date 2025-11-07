@@ -6,7 +6,7 @@ Purpose: Help an LLM (or a new contributor) quickly understand how the mass-maps
 - Goal: For each adjacent pair of fragmentation outputs (a “segment”), detect when a mass element’s trajectory crosses the past light-cone (PLC), then accumulate one HEALPix map per segment.
 - Pipeline per segment:
   1) Build candidate periodic replications whose Lagrangian AABB overlaps the segment’s comoving radial shell [chi_prev, chi_curr].
-  2) Optional Lagrangian sub-volume culling: split the local tile into blocks; use padded AABB radial and angular tests to quickly reject block/rep pairs that cannot contribute.
+  2) Optional Lagrangian sub-volume culling: split the local tile into blocks; use padded AABB radial test plus an exact angular test (axis piercing + corner enumeration) to quickly reject block/rep pairs that cannot contribute.
   3) For remaining block/rep pairs, traverse particles, detect PLC entry H = chi(z) − r sign change between endpoints, linearly interpolate entry position, apply aperture filter, pixelize, and accumulate into the segment’s map.
   4) Reduce across MPI tasks and write exactly one FITS per segment (rank 0 performs I/O).
 
@@ -36,6 +36,7 @@ Purpose: Help an LLM (or a new contributor) quickly understand how the mass-maps
 - MASS_MAPS_VARPAD_WARN_FRAC: on last segment, warn if |x(q,z) − q| exceeds pad for more than this fraction.
 - MASS_MAPS_THREAD_ACCUM: use per-thread local maps and merge once per block to reduce atomics; otherwise, accumulate with OpenMP atomics into a shared map.
 - DISP_HISTOGRAM (+ DISP_HIST_*): optional displacement magnitude histogram per endpoint, MPI-reduced and written as ASCII on rank 0.
+- MASS_MAPS_CAP_DIAG: optional cap-boundary diagnostics (max accepted/missed angle, prefix misses). Compiled only when enabled; default off.
 
 ## Data model and memory
 - Segments (MassSheets): NMassSheets = outputs.n − 1. Each has bounds in redshift and precomputed comoving distances (chi_prev/curr), angular-diameter distances (da), deltas and inverses, and chi^3 span for potential volumetric weights.
@@ -56,9 +57,9 @@ Steps:
 4) Optional Lagrangian culling path (enabled when MASS_MAPS_BLOCKS_* > 0):
    - Split the local FFT tile (global lattice coords for this rank) into nbx×nby×nbz blocks.
    - Compute unified AABB pad aabb_pad_phys for this segment using MASS_MAPS_VARPAD_FACTOR, sigma8, redshift, and H0. Report pad in Mpc, Mpc/h, and cells.
-   - For each block, construct its padded Lagrangian AABB in phys units and cull replications using two conservative tests:
+   - For each block, construct its padded Lagrangian AABB in phys units and cull replications using two tests:
      • Radial shell test: via aabb_distance_bounds_to_point() against the segment shell [chi_prev, chi_curr]. If [dmin,dmax] ∩ [chi_prev,chi_curr] = ∅, reject the block for all reps.
-     • Angular bound: compute a tight upper bound on cos(angle) over the AABB w.r.t. PLC axis; if max cos ≤ cos(aperture), the entire AABB is outside the aperture.
+     • Exact angular test: project AABB onto the PLC transverse basis (ex, ey) and check axis piercing (x span contains 0 and y span contains 0). If pierced, early accept (block cannot be wholly outside). Otherwise, enumerate the 8 corners relative to the PLC center, compute cos(theta) at each, and reject only if the maximum corner cosine ≤ cos(aperture).
    - If a block survives for at least one replication, build per-block caches of endpoint positions in phys Mpc: for each particle, load pos_data from products (mass_maps_set_point_from_products_global), then compute absolute prev/curr Eulerian positions with mass_maps_compute_prev_curr_positions (q + LPT displacements assembled to compiled order). Optionally count |Pcurr − Pprev| > aabb_pad_phys diagnostics on last segment.
    - For each passing replication r of this block: loop particles using cached positions, add RepShift[r], test PLC entry via mass_maps_crossing_from_shifted_positions (inside→outside crossing; linear interpolation alpha = H_prev / (H_prev − H_curr) with epsilon guard), check entry against redshift bounds and aperture (mass_maps_entry_inside_aperture), optional uncollapsed-only filter (z_plc > zacc), compute pixel (mass_maps_compute_pixel_from_pos), and accumulate weight (default 1.0) into the segment map.
    - Accumulation strategy:
@@ -75,7 +76,7 @@ Edge conditions and guards:
 - Small denominator for alpha (H_prev − H_curr): guarded by epsilon; treat as no crossing.
 - If computed Ncap=0 for given NSIDE and aperture, maps are disabled with a warning.
 - Out-of-cap pixel indices are guarded; debug prints if any OOB occur.
-- Aperture filter: skip angular culling for blocks where PLC center lies inside padded AABB (dmin==0, angular bound not applicable).
+- Angular culling: early-accept blocks whose transverse projection spans the PLC axis (axis piercing). Otherwise, apply corner enumeration test as above.
 - Optional z_plc bounds check: ensure interpolated z_plc lies within [z_prev,z_curr] with tolerance; otherwise count as out-of-segment.
 
 ## Core helpers (by role)
@@ -136,7 +137,7 @@ OpenMP (shared memory):
 - Replication coarse prefilter: eliminate whole periodic images that cannot intersect the segment shell.
 - Lagrangian block culling with variable AABB pad:
   - Early reject blocks using tight radial bounds [dmin,dmax] vs [chi_prev,chi_curr].
-  - Conservative angular bound to skip blocks entirely outside the aperture.
+  - Exact angular culling (axis piercing + corner enumeration) to skip blocks entirely outside the aperture without false negatives near large apertures.
   - Variable pad scales with sigma8 and redshift; units converted to phys Mpc to match internal position units. On the last segment, collect stats to validate pad adequacy (warn if many particles exceed pad).
 - Per-block position cache: reuse prev/curr positions across multiple replications, avoiding recomputation.
 - Precompute replication shifts once per segment for all candidates.
