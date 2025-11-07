@@ -592,6 +592,29 @@ int set_plc(void)
     plc.zvers[rot[0]] = params.PLCAxis[0];
     plc.zvers[rot[1]] = params.PLCAxis[1];
     plc.zvers[rot[2]] = params.PLCAxis[2];
+    /* Sanity check: supplied PLC center should lie inside simulation box in physical units.
+       We accept a tiny negative/overflow tolerance and wrap if clearly out of range. */
+    {
+      double tol = 1e-8;
+      for (int a = 0; a < 3; ++a)
+      {
+        double phys = params.PLCCenter[a]; /* physical Mpc */
+        if (phys < -tol || phys > params.BoxSize + tol)
+        {
+          if (!ThisTask)
+            fprintf(stderr, "Warning: PLCCenter[%d]=%g outside [0,BoxSize=%g). Applying periodic wrapping.\n", a, phys, params.BoxSize);
+          /* Periodic wrap into [0,BoxSize) */
+          double L = params.BoxSize;
+          phys = fmod(phys, L);
+          if (phys < 0)
+            phys += L;
+          params.PLCCenter[a] = phys;
+          /* Recompute lattice-scaled center component */
+          int axis = rot[a];
+          plc.center[axis] = params.PLCCenter[a] / params.BoxSize * params.GridSize[0];
+        }
+      }
+    }
   }
   else
   {

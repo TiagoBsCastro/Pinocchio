@@ -409,6 +409,7 @@ static void mass_maps_disp_hist_accumulate_endpoint(int use_curr,
  *     both InterPartDist and variable pad context in headers. No unit conversion happens here.
  *   - Concurrency: This function uses MPI_Reduce but no OpenMP loops directly.
  **/
+/* Internal helper implementing the documented per-segment histogram workflow */
 static void mass_maps_disp_hist_on_segment(int segment_index, double z_prev, double z_curr)
 {
   (void)segment_index;
@@ -828,7 +829,24 @@ static inline int mass_maps_entry_inside_aperture(const double pos[3])
   return angle <= A;
 }
 
-/* Helper: compute angular separation (deg) of pos from PLC axis (cached basis) */
+/**
+ * mass_maps_angle_deg_from_pos
+ * ----------------------------
+ * Purpose
+ *   Compute the angular separation θ(pos) in degrees between (pos − PLC_center)
+ *   and the PLC axis (plc.zvers), using the cached PLC basis and center.
+ *   Intended for diagnostics (e.g., cap prefix miss tracking).
+ *
+ * Parameters
+ *   - pos  Absolute position in true Mpc (same units as InterPartDist-scaled positions).
+ *
+ * Returns
+ *   Angle in degrees in [0,180]. Returns 0 for |pos − center| == 0.
+ *
+ * Notes
+ *   - Clamps cosine to [-1,1] before acos to stabilize numerics.
+ *   - Thread-safe: relies on idempotent cache init.
+ */
 static inline double mass_maps_angle_deg_from_pos(const double pos[3])
 {
   mass_maps_cache_plc_basis_and_center();
@@ -1333,6 +1351,24 @@ int mass_maps_init_healpix_maps(int nside)
  *   - When npix <= 0, outputs (if requested) are set to their neutral defaults:
  *     sum=0, min=0, max=0, nnz=0.
  */
+/**
+ * mass_maps_map_stats
+ * -------------------
+ * Purpose
+ *   Gather basic statistics over a map buffer: sum, min, max, and exact non-zero count.
+ *
+ * Parameters
+ *   - map      Pointer to map buffer (length npix). May be NULL when npix<=0.
+ *   - npix     Number of pixels (>=0).
+ *   - sum_out  Optional; receives sum (0 if npix<=0).
+ *   - min_out  Optional; receives minimum (0 if npix<=0).
+ *   - max_out  Optional; receives maximum (0 if npix<=0).
+ *   - nnz_out  Optional; receives count of values v != 0.0.
+ *
+ * Notes
+ *   - Exact comparison (v != 0.0); callers needing tolerance must post-process.
+ *   - Safe for npix==0 (all outputs default to 0).
+ */
 static inline void mass_maps_map_stats(const double *map, long npix,
                                        double *sum_out, double *min_out, double *max_out, long *nnz_out)
 {
@@ -1507,6 +1543,27 @@ static inline int mass_maps_crossing_from_shifted_positions(const double Pprev[3
  *   - Used for quick culling against the PLC spherical shell: compare these
  *     bounds with the segment's chi interval to early-accept or early-reject
  *     replications before finer tests.
+ */
+/**
+ * aabb_distance_bounds_to_point
+ * -----------------------------
+ * Purpose
+ *   Compute the minimum distance (d_min) from point c to an axis-aligned box
+ *   [minv,maxv] and the maximum corner distance (d_max).
+ *
+ * Parameters
+ *   - minv[3]     Minimum corner.
+ *   - maxv[3]     Maximum corner.
+ *   - c[3]        Reference point.
+ *   - dmin_out    Output: minimum distance (>=0).
+ *   - dmax_out    Output: maximum distance (>= d_min).
+ *
+ * Behavior
+ *   - d_min: sum squared clamp residuals per axis, then sqrt.
+ *   - d_max: choose farther face delta per axis, then sqrt of sum squares.
+ *
+ * Notes
+ *   - Used for radial pruning before finer angular/particle tests.
  */
 static inline void aabb_distance_bounds_to_point(const double minv[3], const double maxv[3], const double c[3], double *dmin_out, double *dmax_out)
 {
@@ -2473,9 +2530,12 @@ int mass_maps_particle_sign_change(int rep_id,
  *     in physical units (true Mpc).
  *   - Optional Lagrangian culling: if MASS_MAPS_BLOCKS_* > 0, split the local tile into
  *     blocks; build a padded AABB (variable pad in true Mpc via MASS_MAPS_VARPAD_FACTOR)
- *     and cull by radial [dmin,dmax] vs [chi_min,chi_max] and a conservative angular
- *     bound against the PLC aperture; reuse cached prev/curr positions per block; optionally
- *     use per-thread LocalMap (MASS_MAPS_THREAD_ACCUM) to reduce atomic contention.
+ *     and cull by radial [dmin,dmax] vs [chi_min,chi_max] plus an exact angular test:
+ *       • Axis-piercing check in the PLC transverse plane (x/y spans contain 0) to early-accept.
+ *       • Otherwise, enumerate the 8 AABB corners relative to the PLC center and compute the
+ *         maximum corner cosine with the PLC axis; reject the block only if max_cos <= cos(A).
+ *     Reuse cached prev/curr positions per block; optionally use per-thread LocalMap
+ *     (MASS_MAPS_THREAD_ACCUM) to reduce atomic contention.
  *   - For each particle and passing replication:
  *       • Build previous and current Eulerian positions (mass_maps_compute_prev_curr_positions),
  *         apply replication shift.
