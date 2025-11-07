@@ -1,0 +1,4 @@
+# Mass sheet definitions
+# Columns:
+#  id  z_hi       z_lo       delta_z    chi_hi       chi_lo       delta_chi    inv_delta_chi  da_hi        da_lo        chi3_diff   
+  0 0.10000000 0.00000000 0.10000000 432.54711257 0.00000000   432.54711257 0.00231188689263 393.30902740 0.00000000   80928269    

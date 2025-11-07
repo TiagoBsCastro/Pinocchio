@@ -1,0 +1,16 @@
+<map id="mass_maps_init_healpix_maps" name="mass_maps_init_healpix_maps">
+<area shape="rect" id="Node000001" title=" " alt="" coords="5,133,232,159"/>
+<area shape="rect" id="Node000002" href="$fmax_8c.html#a76000ea6ddfd81a9d6cf317d53f54378" title=" " alt="" coords="354,5,410,31"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="134,131,195,86,236,61,279,40,339,22,341,27,281,44,238,66,198,91,137,135"/>
+<area shape="rect" id="Node000003" href="$write__mass__maps_8c.html#af48c2f2e1f7a068bdf277f6e51dbb687" title=" " alt="" coords="280,55,484,80"/>
+<area shape="poly" id="edge2_Node000001_Node000003" title=" " alt="" coords="153,131,279,89,309,81,311,86,281,94,155,136"/>
+<area shape="rect" id="Node000004" href="$write__mass__maps_8c.html#a544729c08aec453c9512dfb6c8798fe6" title=" " alt="" coords="294,104,470,129"/>
+<area shape="poly" id="edge3_Node000001_Node000004" title=" " alt="" coords="232,131,280,125,281,131,232,136"/>
+<area shape="rect" id="Node000005" href="$write__mass__maps_8c.html#a7240d4c21b5d0ee79e20f10943ec811b" title=" " alt="" coords="294,154,470,194"/>
+<area shape="poly" id="edge4_Node000001_Node000005" title=" " alt="" coords="232,155,281,161,280,166,232,161"/>
+<area shape="rect" id="Node000006" href="$write__mass__maps_8c.html#a5c1fa2c1f31226a3f73d96ccdb7073f6" title=" " alt="" coords="532,183,705,223"/>
+<area shape="poly" id="edge6_Node000001_Node000006" title=" " alt="" coords="146,156,206,182,281,203,341,211,403,214,518,211,518,216,403,220,341,217,279,209,205,187,144,161"/>
+<area shape="rect" id="Node000007" href="$write__mass__maps_8c.html#a05db3aea9295bd8e953b4d42710e55f6" title=" " alt="" coords="281,269,483,295"/>
+<area shape="poly" id="edge7_Node000001_Node000007" title=" " alt="" coords="138,157,199,200,281,248,320,263,318,268,279,252,196,205,135,161"/>
+<area shape="poly" id="edge5_Node000005_Node000006" title=" " alt="" coords="471,182,519,188,518,194,470,188"/>
+</map>

@@ -1,0 +1,14 @@
+<map id="mass_maps_axis_pixel_ring" name="mass_maps_axis_pixel_ring">
+<area shape="rect" id="Node000001" title=" " alt="" coords="957,31,1161,56"/>
+<area shape="rect" id="Node000002" href="$write__mass__maps_8c.html#a5935cb352e2164e79bbabe30af0bd0b7" title=" " alt="" coords="683,5,909,31"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="944,35,909,32,910,26,944,30"/>
+<area shape="rect" id="Node000003" href="$write__mass__maps_8c.html#a523d76e3e01c2ce2c7d973cf5ad60cb6" title=" " alt="" coords="413,31,635,56"/>
+<area shape="poly" id="edge6_Node000001_Node000003" title=" " alt="" coords="943,46,635,46,635,41,943,41"/>
+<area shape="poly" id="edge2_Node000002_Node000003" title=" " alt="" coords="669,32,635,36,635,30,669,27"/>
+<area shape="rect" id="Node000004" href="$fragment_8c.html#ac2bb250921932f90f7b0939d1181b66d" title=" " alt="" coords="283,31,365,56"/>
+<area shape="poly" id="edge3_Node000003_Node000004" title=" " alt="" coords="399,46,366,46,366,41,399,41"/>
+<area shape="rect" id="Node000005" href="$fragment_8c.html#ae3aa75d17cbc170e60f4f48c4a2ffdf5" title=" " alt="" coords="108,31,235,56"/>
+<area shape="poly" id="edge4_Node000004_Node000005" title=" " alt="" coords="269,46,235,46,235,41,269,41"/>
+<area shape="rect" id="Node000006" href="$pinocchio_8c.html#a647f21a28344e1d9c643f4115516d7c9" title=" " alt="" coords="5,31,60,56"/>
+<area shape="poly" id="edge5_Node000005_Node000006" title=" " alt="" coords="95,46,60,46,60,41,95,41"/>
+</map>

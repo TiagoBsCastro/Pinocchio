@@ -1,0 +1,21 @@
+<map id="system_of_ODEs" name="system_of_ODEs">
+<area shape="rect" id="Node000001" title=" " alt="" coords="5,81,137,107"/>
+<area shape="rect" id="Node000002" href="$cosmo_8c.html#ab4c8868992fc24f252c2064899316b3d" title=" " alt="" coords="332,56,413,81"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="137,86,318,71,319,76,138,91"/>
+<area shape="rect" id="Node000006" href="$cosmo_8c.html#a445fb83b1fea3dc80e9d163d14e7591f" title=" " alt="" coords="185,107,284,132"/>
+<area shape="poly" id="edge6_Node000001_Node000006" title=" " alt="" coords="138,102,172,107,171,112,137,107"/>
+<area shape="rect" id="Node000003" href="$cosmo_8c.html#ab72944c257efd64b18cbf29712033a3d" title=" " alt="" coords="467,5,620,31"/>
+<area shape="poly" id="edge2_Node000002_Node000003" title=" " alt="" coords="413,54,486,32,488,37,414,59"/>
+<area shape="rect" id="Node000004" href="$cosmo_8c.html#a6341f5394ed17a00dc77c5519b292ae3" title=" " alt="" coords="673,56,797,81"/>
+<area shape="poly" id="edge4_Node000002_Node000004" title=" " alt="" coords="414,66,659,66,659,71,414,71"/>
+<area shape="rect" id="Node000005" href="$cosmo_8c.html#abbdf4cc6d70bc314c73e389cb6ce7d7a" title=" " alt="" coords="461,107,625,132"/>
+<area shape="poly" id="edge5_Node000002_Node000005" title=" " alt="" coords="414,78,488,100,486,105,413,83"/>
+<area shape="poly" id="edge3_Node000003_Node000004" title=" " alt="" coords="593,28,674,50,672,55,592,33"/>
+<area shape="rect" id="Node000007" href="$cosmo_8c.html#ac7fbe724feedc1cb5b0afe20117b5f8d" title=" " alt="" coords="341,107,405,132"/>
+<area shape="poly" id="edge7_Node000006_Node000007" title=" " alt="" coords="284,117,327,117,327,122,284,122"/>
+<area shape="rect" id="Node000008" href="$cosmo_8c.html#a23ab46a1787abb61a8685d7c8f06cdd4" title=" " alt="" coords="353,156,392,181"/>
+<area shape="poly" id="edge8_Node000006_Node000008" title=" " alt="" coords="272,130,342,155,340,160,270,135"/>
+<area shape="rect" id="Node000009" href="$cosmo_8c.html#a911e9ce363c4662ce531c65885519f7a" title=" " alt="" coords="509,156,577,181"/>
+<area shape="poly" id="edge9_Node000008_Node000009" title=" " alt="" coords="393,166,495,166,495,171,393,171"/>
+<area shape="poly" id="edge10_Node000009_Node000004" title=" " alt="" coords="576,159,624,142,669,116,707,88,710,92,672,120,626,147,578,164"/>
+</map>

@@ -1,0 +1,12 @@
+<map id="mass_maps_init_sheets" name="mass_maps_init_sheets">
+<area shape="rect" id="Node000001" title=" " alt="" coords="5,55,184,80"/>
+<area shape="rect" id="Node000002" href="$cosmo_8c.html#aa3beda8770f3f4e1b00e486bb647edc5" title=" " alt="" coords="232,5,377,31"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="149,52,236,31,237,36,150,57"/>
+<area shape="rect" id="Node000004" href="$cosmo_8c.html#ad002adbaf02b0fddeafc816d4b4f6c7e" title=" " alt="" coords="235,55,375,80"/>
+<area shape="poly" id="edge3_Node000001_Node000004" title=" " alt="" coords="185,65,221,65,221,70,185,70"/>
+<area shape="rect" id="Node000005" href="$fmax_8c.html#a76000ea6ddfd81a9d6cf317d53f54378" title=" " alt="" coords="277,104,333,129"/>
+<area shape="poly" id="edge5_Node000001_Node000005" title=" " alt="" coords="150,77,264,105,263,110,149,83"/>
+<area shape="rect" id="Node000003" href="$cosmo_8c.html#a6341f5394ed17a00dc77c5519b292ae3" title=" " alt="" coords="425,31,549,56"/>
+<area shape="poly" id="edge2_Node000002_Node000003" title=" " alt="" coords="378,25,412,30,411,35,377,31"/>
+<area shape="poly" id="edge4_Node000004_Node000003" title=" " alt="" coords="375,55,411,51,412,56,375,61"/>
+</map>

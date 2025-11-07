@@ -1,0 +1,13 @@
+<map id="ell_sng" name="ell_sng">
+<area shape="rect" id="Node000001" title=" " alt="" coords="811,5,879,31"/>
+<area shape="rect" id="Node000002" href="$collapse__times_8c.html#a17f64ed25a27688514593ecaed77105a" title=" " alt="" coords="724,5,763,31"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="797,21,763,21,763,15,797,15"/>
+<area shape="rect" id="Node000003" href="$collapse__times_8c.html#a6b93e952f9a470157498b9a72ea1e22f" title=" " alt="" coords="508,5,676,31"/>
+<area shape="poly" id="edge2_Node000002_Node000003" title=" " alt="" coords="710,21,676,21,676,15,710,15"/>
+<area shape="rect" id="Node000004" href="$collapse__times_8c.html#a7de3cd9744dabc41d67e31ed8c5928de" title=" " alt="" coords="276,5,460,31"/>
+<area shape="poly" id="edge3_Node000003_Node000004" title=" " alt="" coords="494,21,460,21,460,15,494,15"/>
+<area shape="rect" id="Node000005" href="$fmax_8c.html#ac6c918d99a0517c1106d2b330c087f8a" title=" " alt="" coords="108,5,228,31"/>
+<area shape="poly" id="edge4_Node000004_Node000005" title=" " alt="" coords="262,21,229,21,229,15,262,15"/>
+<area shape="rect" id="Node000006" href="$pinocchio_8c.html#a647f21a28344e1d9c643f4115516d7c9" title=" " alt="" coords="5,5,60,31"/>
+<area shape="poly" id="edge5_Node000005_Node000006" title=" " alt="" coords="94,21,60,21,60,15,94,15"/>
+</map>

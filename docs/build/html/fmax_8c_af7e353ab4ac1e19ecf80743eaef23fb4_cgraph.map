@@ -1,0 +1,16 @@
+<map id="compute_second_derivatives" name="compute_second_derivatives">
+<area shape="rect" id="Node000001" title=" " alt="" coords="5,80,217,105"/>
+<area shape="rect" id="Node000002" href="$fmax-fftw_8c.html#a7852a9463984d6a264677376fa61cfb8" title=" " alt="" coords="265,55,417,80"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="217,78,252,75,252,80,218,84"/>
+<area shape="rect" id="Node000003" href="$fmax_8c.html#a76000ea6ddfd81a9d6cf317d53f54378" title=" " alt="" coords="509,5,565,31"/>
+<area shape="poly" id="edge5_Node000001_Node000003" title=" " alt="" coords="143,77,199,57,265,39,327,29,390,22,495,16,495,21,391,27,328,34,266,45,201,62,145,82"/>
+<area shape="rect" id="Node000006" href="$fmax-fftw_8c.html#a2b33f3af0a53380680cd2014715d2f88" title=" " alt="" coords="268,104,415,129"/>
+<area shape="poly" id="edge6_Node000001_Node000006" title=" " alt="" coords="218,101,255,105,254,110,217,106"/>
+<area shape="rect" id="Node000007" href="$fmax-fftw_8c.html#a7059752d6936489370334baac9522bf9" title=" " alt="" coords="277,153,406,179"/>
+<area shape="poly" id="edge7_Node000001_Node000007" title=" " alt="" coords="153,103,266,139,288,147,287,152,265,145,151,108"/>
+<area shape="poly" id="edge2_Node000002_Node000003" title=" " alt="" coords="392,52,494,26,496,31,393,57"/>
+<area shape="rect" id="Node000004" href="$fmax-fftw_8c.html#a0a0b99548967fb246932282f353e5d80" title=" " alt="" coords="473,55,600,80"/>
+<area shape="poly" id="edge3_Node000002_Node000004" title=" " alt="" coords="418,65,460,65,460,70,418,70"/>
+<area shape="rect" id="Node000005" href="$fmax-fftw_8c.html#a9b00c4c92bd36a79d29b634244174f38" title=" " alt="" coords="465,104,608,129"/>
+<area shape="poly" id="edge4_Node000002_Node000005" title=" " alt="" coords="393,77,473,98,472,103,392,83"/>
+</map>

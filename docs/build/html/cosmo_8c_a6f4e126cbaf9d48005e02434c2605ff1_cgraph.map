@@ -1,0 +1,30 @@
+<map id="normalize_PowerSpectrum" name="normalize_PowerSpectrum">
+<area shape="rect" id="Node000001" title=" " alt="" coords="5,104,201,129"/>
+<area shape="rect" id="Node000002" href="$cosmo_8c.html#ab20739d74ee8f4246073637e01d6a305" title=" " alt="" coords="249,104,420,129"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="202,114,236,114,236,119,202,119"/>
+<area shape="rect" id="Node000003" href="$cosmo_8c.html#acc3f98f9efcc34eeb5447d1bf317dbe8" title=" " alt="" coords="468,104,663,129"/>
+<area shape="poly" id="edge2_Node000002_Node000003" title=" " alt="" coords="420,114,454,114,454,119,420,119"/>
+<area shape="rect" id="Node000004" href="$cosmo_8c.html#a9fbcf5b69c272e801cf320cf814b23c4" title=" " alt="" coords="719,31,831,56"/>
+<area shape="poly" id="edge3_Node000003_Node000004" title=" " alt="" coords="602,101,724,58,726,63,604,106"/>
+<area shape="rect" id="Node000007" href="$cosmo_8c.html#adb3827724e24c320717073266dbfac4c" title=" " alt="" coords="713,104,837,129"/>
+<area shape="poly" id="edge6_Node000003_Node000007" title=" " alt="" coords="663,114,699,114,699,119,663,119"/>
+<area shape="rect" id="Node000014" href="$cosmo_8c.html#a9817ba0d254db24f71f8d7ab242b4fba" title=" " alt="" coords="711,153,840,179"/>
+<area shape="poly" id="edge14_Node000003_Node000014" title=" " alt="" coords="621,127,708,148,707,153,619,132"/>
+<area shape="rect" id="Node000005" href="$cosmo_8c.html#a8847e5b8ea1f9c458c8bf9e5f36837a9" title=" " alt="" coords="901,5,1041,31"/>
+<area shape="poly" id="edge4_Node000004_Node000005" title=" " alt="" coords="831,33,887,26,888,31,832,39"/>
+<area shape="rect" id="Node000006" href="$cosmo_8c.html#a6341f5394ed17a00dc77c5519b292ae3" title=" " alt="" coords="1103,31,1227,56"/>
+<area shape="poly" id="edge5_Node000005_Node000006" title=" " alt="" coords="1042,25,1089,31,1088,36,1041,30"/>
+<area shape="rect" id="Node000008" href="$cosmo_8c.html#a27427d60987e3e074ad1d7215080dc69" title=" " alt="" coords="888,104,1055,129"/>
+<area shape="poly" id="edge7_Node000007_Node000008" title=" " alt="" coords="838,114,874,114,874,119,838,119"/>
+<area shape="rect" id="Node000009" href="$cosmo_8c.html#a4b4d5c5ca327f59df1eba21a73e62113" title=" " alt="" coords="912,153,1031,179"/>
+<area shape="poly" id="edge8_Node000007_Node000009" title=" " alt="" coords="827,127,907,147,906,152,826,132"/>
+<area shape="rect" id="Node000012" href="$cosmo_8c.html#a6d04017af6090db607768f47976b88b8" title=" " alt="" coords="888,203,1055,228"/>
+<area shape="poly" id="edge11_Node000007_Node000012" title=" " alt="" coords="819,127,841,138,857,151,866,164,875,176,889,188,904,195,901,200,887,192,871,180,862,167,853,155,839,143,817,132"/>
+<area shape="rect" id="Node000013" href="$cosmo_8c.html#a428d6d001b5eb57f3f17d85699dd67f5" title=" " alt="" coords="890,55,1053,80"/>
+<area shape="poly" id="edge12_Node000007_Node000013" title=" " alt="" coords="826,101,906,81,907,86,827,107"/>
+<area shape="rect" id="Node000010" href="$cosmo_8c.html#a5c6dbdd7fd7c206feb0554bc93b2436c" title=" " alt="" coords="1122,153,1207,179"/>
+<area shape="poly" id="edge9_Node000009_Node000010" title=" " alt="" coords="1031,163,1108,163,1108,169,1031,169"/>
+<area shape="rect" id="Node000011" href="$cosmo_8c.html#a57dfb02fcd17e35fad40c836ba4d4160" title=" " alt="" coords="1275,153,1313,179"/>
+<area shape="poly" id="edge10_Node000010_Node000011" title=" " alt="" coords="1207,163,1261,163,1261,169,1207,169"/>
+<area shape="poly" id="edge13_Node000013_Node000006" title=" " alt="" coords="1053,55,1088,50,1089,55,1053,60"/>
+</map>

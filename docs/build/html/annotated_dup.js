@@ -1,0 +1,35 @@
+var annotated_dup =
+[
+    [ "ReadPinocchio5", "namespaceReadPinocchio5.html", [
+      [ "catalog", "classReadPinocchio5_1_1catalog.html", "classReadPinocchio5_1_1catalog" ],
+      [ "histories", "classReadPinocchio5_1_1histories.html", "classReadPinocchio5_1_1histories" ],
+      [ "plc", "classReadPinocchio5_1_1plc.html", "classReadPinocchio5_1_1plc" ]
+    ] ],
+    [ "AuxStruct", "structAuxStruct.html", "structAuxStruct" ],
+    [ "back_data", "structback__data.html", "structback__data" ],
+    [ "Block_data", "structBlock__data.html", "structBlock__data" ],
+    [ "catalog_data", "structcatalog__data.html", "structcatalog__data" ],
+    [ "cputime_data", "structcputime__data.html", "structcputime__data" ],
+    [ "dvec_u", "uniondvec__u.html", "uniondvec__u" ],
+    [ "grid_data", "structgrid__data.html", "structgrid__data" ],
+    [ "group_data", "structgroup__data.html", "structgroup__data" ],
+    [ "histories_data", "structhistories__data.html", "structhistories__data" ],
+    [ "internal_data", "structinternal__data.html", "structinternal__data" ],
+    [ "ivec_u", "unionivec__u.html", "unionivec__u" ],
+    [ "MassMapsFilterDiag", "structMassMapsFilterDiag.html", "structMassMapsFilterDiag" ],
+    [ "MassSheet", "structMassSheet.html", "structMassSheet" ],
+    [ "memory_data", "structmemory__data.html", "structmemory__data" ],
+    [ "mf_data", "structmf__data.html", "structmf__data" ],
+    [ "output_data", "structoutput__data.html", "structoutput__data" ],
+    [ "param_data", "structparam__data.html", "structparam__data" ],
+    [ "plc_data", "structplc__data.html", "structplc__data" ],
+    [ "plc_write_data", "structplc__write__data.html", "structplc__write__data" ],
+    [ "plcgroup_data", "structplcgroup__data.html", "structplcgroup__data" ],
+    [ "pos_data", "structpos__data.html", "structpos__data" ],
+    [ "product_data", "structproduct__data.html", "structproduct__data" ],
+    [ "replication_data", "structreplication__data.html", "structreplication__data" ],
+    [ "ScaleDep_data", "structScaleDep__data.html", "structScaleDep__data" ],
+    [ "smoothing_data", "structsmoothing__data.html", "structsmoothing__data" ],
+    [ "SnapshotHeader_data", "structSnapshotHeader__data.html", "structSnapshotHeader__data" ],
+    [ "subbox_data", "structsubbox__data.html", "structsubbox__data" ]
+];

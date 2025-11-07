@@ -1,0 +1,11 @@
+<map id="store_PLC" name="store_PLC">
+<area shape="rect" id="Node000001" title=" " alt="" coords="567,5,653,31"/>
+<area shape="rect" id="Node000002" href="$build__groups_8c.html#a4df1001cc86732388d8ecf04e3372827" title=" " alt="" coords="413,5,519,31"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="553,21,519,21,519,15,553,15"/>
+<area shape="rect" id="Node000003" href="$fragment_8c.html#ac2bb250921932f90f7b0939d1181b66d" title=" " alt="" coords="283,5,365,31"/>
+<area shape="poly" id="edge2_Node000002_Node000003" title=" " alt="" coords="400,21,366,21,366,15,400,15"/>
+<area shape="rect" id="Node000004" href="$fragment_8c.html#ae3aa75d17cbc170e60f4f48c4a2ffdf5" title=" " alt="" coords="108,5,235,31"/>
+<area shape="poly" id="edge3_Node000003_Node000004" title=" " alt="" coords="269,21,235,21,235,15,269,15"/>
+<area shape="rect" id="Node000005" href="$pinocchio_8c.html#a647f21a28344e1d9c643f4115516d7c9" title=" " alt="" coords="5,5,60,31"/>
+<area shape="poly" id="edge4_Node000004_Node000005" title=" " alt="" coords="95,21,60,21,60,15,95,15"/>
+</map>

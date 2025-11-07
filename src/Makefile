@@ -65,6 +65,7 @@ OPTIONS += -DHAVE_CFITSIO
 OPTIONS += -DMASS_MAPS_FILTER_UNCOLLAPSED  # ZPLC>ZACC (requires SNAPSHOT)
 OPTIONS += -DDISP_HISTOGRAM
 OPTIONS += -DMASS_MAPS_THREAD_ACCUM
+OPTIONS += -DMASS_MAPS_NCAP_VERIFY
 
 # Triaxial collapse model (choose one)
 # -DELL_CLASSIC                 Classic ellipsoidal collapse.
@@ -98,6 +99,7 @@ OPTIONS += -DSNAPSHOT
 # -DFR0=1.e-8                   Example FR parameter value.
 OPTIONS += -DRECOMPUTE_DISPLACEMENTS
 OPTIONS += -DREAD_HUBBLE_TABLE
+
 
 # Other options
 # -DWHITENOISE                  White-noise ICs.

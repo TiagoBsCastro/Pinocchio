@@ -1,0 +1,17 @@
+<map id="PowerSpectrum" name="PowerSpectrum">
+<area shape="rect" id="Node000001" title=" " alt="" coords="5,80,129,105"/>
+<area shape="rect" id="Node000002" href="$cosmo_8c.html#a27427d60987e3e074ad1d7215080dc69" title=" " alt="" coords="177,5,344,31"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="92,77,176,40,198,32,199,37,178,44,94,82"/>
+<area shape="rect" id="Node000003" href="$cosmo_8c.html#a4b4d5c5ca327f59df1eba21a73e62113" title=" " alt="" coords="201,55,320,80"/>
+<area shape="poly" id="edge2_Node000001_Node000003" title=" " alt="" coords="129,82,187,74,188,80,130,87"/>
+<area shape="rect" id="Node000006" href="$cosmo_8c.html#a6d04017af6090db607768f47976b88b8" title=" " alt="" coords="177,104,344,129"/>
+<area shape="poly" id="edge5_Node000001_Node000006" title=" " alt="" coords="130,98,164,102,163,107,129,103"/>
+<area shape="rect" id="Node000007" href="$cosmo_8c.html#a428d6d001b5eb57f3f17d85699dd67f5" title=" " alt="" coords="179,153,342,179"/>
+<area shape="poly" id="edge6_Node000001_Node000007" title=" " alt="" coords="95,103,178,140,200,147,198,152,176,144,93,108"/>
+<area shape="rect" id="Node000004" href="$cosmo_8c.html#a5c6dbdd7fd7c206feb0554bc93b2436c" title=" " alt="" coords="411,55,497,80"/>
+<area shape="poly" id="edge3_Node000003_Node000004" title=" " alt="" coords="320,65,398,65,398,70,320,70"/>
+<area shape="rect" id="Node000005" href="$cosmo_8c.html#a57dfb02fcd17e35fad40c836ba4d4160" title=" " alt="" coords="564,55,603,80"/>
+<area shape="poly" id="edge4_Node000004_Node000005" title=" " alt="" coords="497,65,550,65,550,70,497,70"/>
+<area shape="rect" id="Node000008" href="$cosmo_8c.html#a6341f5394ed17a00dc77c5519b292ae3" title=" " alt="" coords="392,153,516,179"/>
+<area shape="poly" id="edge7_Node000007_Node000008" title=" " alt="" coords="342,163,378,163,378,169,342,169"/>
+</map>
