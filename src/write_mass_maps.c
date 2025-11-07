@@ -710,7 +710,31 @@ double *MassMapBoundaryDA = NULL;
 /* HEALPix maps: one map per mass sheet (segment). */
 static int MassMapNSIDE_current = 0;
 static long MassMapNPIX = 0;
-static double *MassMapSegmentMaps = NULL;  /* length = NMassSheets * MassMapNPIX */
+static double *MassMapSegmentMaps = NULL; /* length = NMassSheets * MassMapNPIX */
+/* Diagnostics for cap prefix boundary investigation */
+static unsigned long long MassMapCapPrefixMiss = 0ULL; /* entries inside aperture but ipix >= Ncap */
+static double MassMapCapMissAngleMax = 0.0;            /* max angle (deg) among missed pixels */
+static double MassMapCapAcceptAngleMax = 0.0;          /* max angle (deg) among accepted pixels */
+static int MassMapCapDiagActive = 1;                   /* enable instrumentation (set 0 to disable) */
+
+/* Helper: compute angular separation (deg) of pos from PLC axis (cached basis) */
+static inline double mass_maps_angle_deg_from_pos(const double pos[3])
+{
+  mass_maps_cache_plc_basis_and_center();
+  double vx = pos[0] - MassMapPLC_CenterPhys[0];
+  double vy = pos[1] - MassMapPLC_CenterPhys[1];
+  double vz = pos[2] - MassMapPLC_CenterPhys[2];
+  double vnorm = sqrt(vx * vx + vy * vy + vz * vz);
+  if (vnorm == 0.0)
+    return 0.0;
+  double invv = 1.0 / vnorm;
+  double vhat_z = (vx * MassMapPLC_e3[0] + vy * MassMapPLC_e3[1] + vz * MassMapPLC_e3[2]) * invv;
+  if (vhat_z > 1.0)
+    vhat_z = 1.0;
+  else if (vhat_z < -1.0)
+    vhat_z = -1.0;
+  return acos(vhat_z) * (180.0 / acos(-1.0));
+}
 static double *MassMapReduceBuffer = NULL; /* root-only temporary buffer for reductions */
 /* Per-segment replication candidate list (radial overlap with segment chi span) */
 static int *MassMapSegmentReplications = NULL;
@@ -730,18 +754,6 @@ static long MassMapNCAP = 0;
 #ifndef MASS_MAPS_FULLSKY_OUTPUT
 /* Undefine or set to 0 to use compact partial-sky by default */
 #define MASS_MAPS_FULLSKY_OUTPUT 0
-#endif
-
-/* Optional: allocate map buffers with full-sky size (12*NSIDE^2) even when aperture<180.
-  This bypasses the Ncap prefix sizing while keeping the angular gating logic. */
-#ifndef MASS_MAPS_CAP_AS_FULLSKY
-#define MASS_MAPS_CAP_AS_FULLSKY 0
-#endif
-
-/* Optional: verify analytic Ncap against an exact scan of HEALPix pixels.
-  When enabled, logs analytic vs exact counts at VDIAG on root. */
-#ifndef MASS_MAPS_NCAP_VERIFY
-#define MASS_MAPS_NCAP_VERIFY 0
 #endif
 
 /**
@@ -957,6 +969,14 @@ int mass_maps_init_sheets(void)
     for (int s = 0; s < NMassSheets; ++s)
     {
       MassSheet *ms = &MassSheets[s];
+
+      /* After traversal, print cap prefix diagnostics once per segment (root only) */
+      if (!ThisTask && MassMapCapDiagActive && internal.verbose_level >= VDIAG && params.PLCAperture < 180.0 && MassMapNSIDE_current > 0)
+      {
+        double A = params.PLCAperture;
+        printf("[%s] MASS_MAPS DIAG: aperture=%.2f deg accept_max_angle=%.3f deg miss_max_angle=%.3f deg prefix_miss=%llu\n",
+               fdate(), A, MassMapCapAcceptAngleMax, MassMapCapMissAngleMax, MassMapCapPrefixMiss);
+      }
       printf("  sheet %3d: z_hi=%8.4f z_lo=%8.4f Δz=%8.4f chi_hi=%10.4f chi_lo=%10.4f Δchi=%10.4f\n", s, ms->z_hi, ms->z_lo, ms->delta_z, ms->chi_hi, ms->chi_lo, ms->delta_chi);
     }
   }
@@ -1093,49 +1113,12 @@ static long mass_maps_ncap_from_aperture(int nside, double aperture_deg)
   }
   if (ncap > npix_full)
     ncap = npix_full;
+  /* For very large apertures (> 90 deg), the subset defined by z>=z0 spans
+     all north polar + equatorial + part of south polar rings, still forming
+     a RING prefix. However, callers using this as a cap representation should
+     treat the map as a large cap (not its complement). Diagnostics will help
+     verify boundary coverage. */
   return ncap;
-}
-
-/**
- * mass_maps_ncap_exact_scan
- * -------------------------
- * Purpose
- *   Compute the exact number of pixels whose angular separation from the PLC axis
- *   is <= aperture_deg by scanning all HEALPix pixels at the given NSIDE. Uses
- *   pix2ang_ring to obtain (theta,phi) for each pixel and tests against the cached
- *   PLC axis (MassMapPLC_e3).
- *
- * Notes
- *   - O(12 * NSIDE^2) cost; intended for diagnostics (use MASS_MAPS_NCAP_VERIFY).
- *   - Independent of the RING prefix formula; serves as ground truth for Ncap.
- */
-static long mass_maps_ncap_exact_scan(int nside, double aperture_deg)
-{
-  if (nside <= 0)
-    return 0;
-  long npix_full = mass_maps_npix_from_nside(nside);
-  if (aperture_deg <= 0.0)
-    return 0;
-  if (aperture_deg >= 180.0)
-    return npix_full;
-  /* Ensure PLC axis/basis are cached */
-  mass_maps_cache_plc_basis_and_center();
-  const double *e3 = MassMapPLC_e3;
-  double cz = cos(aperture_deg * (acos(-1.0) / 180.0));
-  long count = 0;
-  for (long ip = 0; ip < npix_full; ++ip)
-  {
-    double th, ph;
-    pix2ang_ring((long)nside, ip, &th, &ph);
-    double sth = sin(th), cth = cos(th);
-    double vx = sth * cos(ph);
-    double vy = sth * sin(ph);
-    double vz = cth;
-    double dot = vx * e3[0] + vy * e3[1] + vz * e3[2];
-    if (dot >= cz)
-      ++count;
-  }
-  return count;
 }
 
 /**
@@ -1266,18 +1249,7 @@ int mass_maps_init_healpix_maps(int nside)
   MassMapNSIDE_current = nside;
   long npix_full = mass_maps_npix_from_nside(nside);
   MassMapNCAP = mass_maps_ncap_from_aperture(nside, params.PLCAperture);
-#if MASS_MAPS_NCAP_VERIFY
-  if (!ThisTask && internal.verbose_level >= VDIAG)
-  {
-    long exact = mass_maps_ncap_exact_scan(nside, params.PLCAperture);
-    long diff = exact - MassMapNCAP;
-    double frac = (MassMapNCAP > 0) ? (100.0 * (double)diff / (double)MassMapNCAP) : 0.0;
-    printf("[%s] MASS_MAPS NCAP_VERIFY: NSIDE=%d aperture=%.6gdeg analytic=%ld exact=%ld delta=%ld (%.3f%%)\n",
-           fdate(), nside, params.PLCAperture, MassMapNCAP, exact, diff, frac);
-  }
-#endif
-  /* Choose storage length: full-sky when CAP_AS_FULLSKY enabled, otherwise Ncap. */
-#if MASS_MAPS_CAP_AS_FULLSKY
+#if MASS_MAPS_FULLSKY_OUTPUT
   MassMapNPIX = npix_full;
 #else
   MassMapNPIX = MassMapNCAP;
@@ -1308,9 +1280,9 @@ int mass_maps_init_healpix_maps(int nside)
   if (!ThisTask && internal.verbose_level >= VDIAG)
   {
     long axis_pix = mass_maps_axis_pixel_ring(nside);
-    printf("[%s] MASS_MAPS: allocated HEALPix maps ORDERING=RING NSIDE=%d fullNPIX=%ld aperture=%.6gdeg Ncap=%ld storage=%s npix=%ld segments=%d axis_pix=%ld\n",
+    printf("[%s] MASS_MAPS: allocated HEALPix maps ORDERING=RING NSIDE=%d fullNPIX=%ld aperture=%.6gdeg Ncap=%ld using_%s npix=%ld segments=%d axis_pix=%ld\n",
            fdate(), nside, npix_full, params.PLCAperture, MassMapNCAP,
-#if MASS_MAPS_CAP_AS_FULLSKY
+#if MASS_MAPS_FULLSKY_OUTPUT
            "FULLSKY",
 #else
            "CAP",
@@ -2520,6 +2492,11 @@ int mass_maps_particle_sign_change(int rep_id,
  **/
 void mass_maps_process_segment(int segment_index, double z_segment, int is_first_segment)
 {
+  /* Reset cap diagnostics per segment */
+  MassMapCapPrefixMiss = 0ULL;
+  MassMapCapMissAngleMax = 0.0;
+  MassMapCapAcceptAngleMax = 0.0;
+
   /* Ensure ZACC values are available in products when filtering uncollapsed-only */
 #if defined(MASS_MAPS_FILTER_UNCOLLAPSED)
 #if defined(SNAPSHOT)
@@ -2884,20 +2861,61 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
             /* Build relative bounds r = x - c */
             double rmin[3] = {min_s[0] - c_phys[0], min_s[1] - c_phys[1], min_s[2] - c_phys[2]};
             double rmax[3] = {max_s[0] - c_phys[0], max_s[1] - c_phys[1], max_s[2] - c_phys[2]};
-            /* max_u_dot: choose per-axis extreme based on sign of u */
-            double max_u_dot = 0.0;
-            for (int a = 0; a < 3; ++a)
-            {
-              double ra = (u[a] >= 0.0) ? rmax[a] : rmin[a];
-              max_u_dot += u[a] * ra;
-            }
-            /* min_norm = dmin from center to AABB; if center inside (dmin==0), skip angular culling */
+            /* Robust angular culling: exact corner-based upper bound.
+               Enumerate all 8 corners of the padded AABB relative to PLC center.
+               Compute cos(theta) = (u·r)/|r| at each corner; if the maximum
+               corner cosine <= cosA, the entire box lies outside the cap.
+               If PLC axis pierces the transverse rectangle (x,y spans contain 0),
+               an interior point with cos(theta)=1 exists, so skip rejection. */
             int angular_pass = 1;
-            if (dmin > 0.0)
+            if (!aperture_is_fullsky)
             {
-              double cos_ub = max_u_dot / dmin;
-              if (cos_ub <= cosA)
-                angular_pass = 0; /* definitely outside aperture */
+              /* Axis piercing test via projections onto PLC x/y basis */
+              double ex[3] = {plc.xvers[0], plc.xvers[1], plc.xvers[2]};
+              double ey[3] = {plc.yvers[0], plc.yvers[1], plc.yvers[2]};
+              double x_min = 0.0, x_max = 0.0, y_min = 0.0, y_max = 0.0;
+              /* Extremal dot with ex */
+              for (int a = 0; a < 3; ++a)
+              {
+                double va = ex[a];
+                double lo = rmin[a];
+                double hi = rmax[a];
+                double add_min = (va >= 0.0) ? va * lo : va * hi;
+                double add_max = (va >= 0.0) ? va * hi : va * lo;
+                x_min += add_min;
+                x_max += add_max;
+                va = ey[a];
+                add_min = (va >= 0.0) ? va * lo : va * hi;
+                add_max = (va >= 0.0) ? va * hi : va * lo;
+                y_min += add_min;
+                y_max += add_max;
+              }
+              int axis_pierces = (x_min <= 0.0 && x_max >= 0.0 && y_min <= 0.0 && y_max >= 0.0);
+              if (!axis_pierces)
+              {
+                double max_corner_cos = -1.0; /* track maximum corner cosine */
+                for (int ax = 0; ax < 2; ++ax)
+                  for (int ay = 0; ay < 2; ++ay)
+                    for (int az = 0; az < 2; ++az)
+                    {
+                      double rc[3] = {
+                          (ax ? rmax[0] : rmin[0]),
+                          (ay ? rmax[1] : rmin[1]),
+                          (az ? rmax[2] : rmin[2])};
+                      double dot = u[0] * rc[0] + u[1] * rc[1] + u[2] * rc[2];
+                      double norm = sqrt(rc[0] * rc[0] + rc[1] * rc[1] + rc[2] * rc[2]);
+                      if (norm == 0.0)
+                        continue;
+                      double cosv = dot / norm;
+                      if (cosv > max_corner_cos)
+                        max_corner_cos = cosv;
+                      if (max_corner_cos > cosA)
+                        goto ANG_DONE; /* early accept */
+                    }
+              ANG_DONE:;
+                if (max_corner_cos <= cosA)
+                  angular_pass = 0; /* all corners outside spherical cap */
+              }
             }
             if (!angular_pass)
               continue;
@@ -3090,6 +3108,17 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                       {
                         if ((unsigned long)ipix < (unsigned long)MassMapNPIX)
                         {
+                          if (MassMapCapDiagActive)
+                          {
+                            double ang = mass_maps_angle_deg_from_pos(entry_pos);
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+                            {
+                              if (ang > MassMapCapAcceptAngleMax)
+                                MassMapCapAcceptAngleMax = ang;
+                            }
+                          }
                           if (LocalMap)
                           {
                             LocalMap[ipix] += 1.0;
@@ -3106,6 +3135,22 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                         else
                         {
                           ipix_oob_local++;
+                          if (MassMapCapDiagActive)
+                          {
+                            double ang = mass_maps_angle_deg_from_pos(entry_pos);
+                        /* Track misses inside aperture but outside prefix */
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                            MassMapCapPrefixMiss++;
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+                            {
+                              if (ang > MassMapCapMissAngleMax)
+                                MassMapCapMissAngleMax = ang;
+                            }
+                          }
                         }
                       }
                     }
@@ -3253,10 +3298,36 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
 #pragma omp atomic update
 #endif
                           map[ipix] += 1.0;
+                          if (MassMapCapDiagActive)
+                          {
+                            double ang = mass_maps_angle_deg_from_pos(entry_pos);
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+                            {
+                              if (ang > MassMapCapAcceptAngleMax)
+                                MassMapCapAcceptAngleMax = ang;
+                            }
+                          }
                         }
                         else
                         {
                           ipix_oob_local++;
+                          if (MassMapCapDiagActive)
+                          {
+                            double ang = mass_maps_angle_deg_from_pos(entry_pos);
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                            MassMapCapPrefixMiss++;
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+                            {
+                              if (ang > MassMapCapMissAngleMax)
+                                MassMapCapMissAngleMax = ang;
+                            }
+                          }
                         }
                       }
                     }
