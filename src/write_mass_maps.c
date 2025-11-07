@@ -717,24 +717,6 @@ static double MassMapCapMissAngleMax = 0.0;            /* max angle (deg) among 
 static double MassMapCapAcceptAngleMax = 0.0;          /* max angle (deg) among accepted pixels */
 static int MassMapCapDiagActive = 1;                   /* enable instrumentation (set 0 to disable) */
 
-/* Helper: compute angular separation (deg) of pos from PLC axis (cached basis) */
-static inline double mass_maps_angle_deg_from_pos(const double pos[3])
-{
-  mass_maps_cache_plc_basis_and_center();
-  double vx = pos[0] - MassMapPLC_CenterPhys[0];
-  double vy = pos[1] - MassMapPLC_CenterPhys[1];
-  double vz = pos[2] - MassMapPLC_CenterPhys[2];
-  double vnorm = sqrt(vx * vx + vy * vy + vz * vz);
-  if (vnorm == 0.0)
-    return 0.0;
-  double invv = 1.0 / vnorm;
-  double vhat_z = (vx * MassMapPLC_e3[0] + vy * MassMapPLC_e3[1] + vz * MassMapPLC_e3[2]) * invv;
-  if (vhat_z > 1.0)
-    vhat_z = 1.0;
-  else if (vhat_z < -1.0)
-    vhat_z = -1.0;
-  return acos(vhat_z) * (180.0 / acos(-1.0));
-}
 static double *MassMapReduceBuffer = NULL; /* root-only temporary buffer for reductions */
 /* Per-segment replication candidate list (radial overlap with segment chi span) */
 static int *MassMapSegmentReplications = NULL;
@@ -833,6 +815,25 @@ static inline int mass_maps_entry_inside_aperture(const double pos[3])
   double angle = acos(vhat_z) * (180.0 / acos(-1.0));
   double A = params.PLCAperture;
   return angle <= A;
+}
+
+/* Helper: compute angular separation (deg) of pos from PLC axis (cached basis) */
+static inline double mass_maps_angle_deg_from_pos(const double pos[3])
+{
+  mass_maps_cache_plc_basis_and_center();
+  double vx = pos[0] - MassMapPLC_CenterPhys[0];
+  double vy = pos[1] - MassMapPLC_CenterPhys[1];
+  double vz = pos[2] - MassMapPLC_CenterPhys[2];
+  double vnorm = sqrt(vx * vx + vy * vy + vz * vz);
+  if (vnorm == 0.0)
+    return 0.0;
+  double invv = 1.0 / vnorm;
+  double vhat_z = (vx * MassMapPLC_e3[0] + vy * MassMapPLC_e3[1] + vz * MassMapPLC_e3[2]) * invv;
+  if (vhat_z > 1.0)
+    vhat_z = 1.0;
+  else if (vhat_z < -1.0)
+    vhat_z = -1.0;
+  return acos(vhat_z) * (180.0 / acos(-1.0));
 }
 
 /**
@@ -2688,9 +2689,10 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
 #else
   int thread_accum = 0;
 #endif
-  /* Precompute cos(aperture) for conservative angular culling */
+  /* Precompute aperture and its cosine for angular culling */
   double A = params.PLCAperture;
   double cosA = cos(A * (acos(-1.0) / 180.0));
+  int aperture_is_fullsky = (A >= 180.0 - 1e-9);
   int nx_local = (int)MyGrids[0].GSlocal[_x_];
   int ny_local = (int)MyGrids[0].GSlocal[_y_];
   int nz_local = (int)MyGrids[0].GSlocal[_z_];
