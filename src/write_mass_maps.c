@@ -711,6 +711,30 @@ double *MassMapBoundaryDA = NULL;
 static int MassMapNSIDE_current = 0;
 static long MassMapNPIX = 0;
 static double *MassMapSegmentMaps = NULL;  /* length = NMassSheets * MassMapNPIX */
+/* Diagnostics for cap prefix boundary investigation */
+static unsigned long long MassMapCapPrefixMiss = 0ULL;      /* entries inside aperture but ipix >= Ncap */
+static double MassMapCapMissAngleMax = 0.0;                 /* max angle (deg) among missed pixels */
+static double MassMapCapAcceptAngleMax = 0.0;               /* max angle (deg) among accepted pixels */
+static int MassMapCapDiagActive = 1;                        /* enable instrumentation (set 0 to disable) */
+
+/* Helper: compute angular separation (deg) of pos from PLC axis (cached basis) */
+static inline double mass_maps_angle_deg_from_pos(const double pos[3])
+{
+  mass_maps_cache_plc_basis_and_center();
+  double vx = pos[0] - MassMapPLC_CenterPhys[0];
+  double vy = pos[1] - MassMapPLC_CenterPhys[1];
+  double vz = pos[2] - MassMapPLC_CenterPhys[2];
+  double vnorm = sqrt(vx * vx + vy * vy + vz * vz);
+  if (vnorm == 0.0)
+    return 0.0;
+  double invv = 1.0 / vnorm;
+  double vhat_z = (vx * MassMapPLC_e3[0] + vy * MassMapPLC_e3[1] + vz * MassMapPLC_e3[2]) * invv;
+  if (vhat_z > 1.0)
+    vhat_z = 1.0;
+  else if (vhat_z < -1.0)
+    vhat_z = -1.0;
+  return acos(vhat_z) * (180.0 / acos(-1.0));
+}
 static double *MassMapReduceBuffer = NULL; /* root-only temporary buffer for reductions */
 /* Per-segment replication candidate list (radial overlap with segment chi span) */
 static int *MassMapSegmentReplications = NULL;
@@ -945,6 +969,14 @@ int mass_maps_init_sheets(void)
     for (int s = 0; s < NMassSheets; ++s)
     {
       MassSheet *ms = &MassSheets[s];
+
+  /* After traversal, print cap prefix diagnostics once per segment (root only) */
+  if (!ThisTask && MassMapCapDiagActive && internal.verbose_level >= VDIAG && params.PLCAperture < 180.0 && MassMapNSIDE_current > 0)
+  {
+    double A = params.PLCAperture;
+    printf("[%s] MASS_MAPS DIAG: aperture=%.2f deg accept_max_angle=%.3f deg miss_max_angle=%.3f deg prefix_miss=%llu\n",
+           fdate(), A, MassMapCapAcceptAngleMax, MassMapCapMissAngleMax, MassMapCapPrefixMiss);
+  }
       printf("  sheet %3d: z_hi=%8.4f z_lo=%8.4f Δz=%8.4f chi_hi=%10.4f chi_lo=%10.4f Δchi=%10.4f\n", s, ms->z_hi, ms->z_lo, ms->delta_z, ms->chi_hi, ms->chi_lo, ms->delta_chi);
     }
   }
@@ -1081,6 +1113,11 @@ static long mass_maps_ncap_from_aperture(int nside, double aperture_deg)
   }
   if (ncap > npix_full)
     ncap = npix_full;
+  /* For very large apertures (> 90 deg), the subset defined by z>=z0 spans
+     all north polar + equatorial + part of south polar rings, still forming
+     a RING prefix. However, callers using this as a cap representation should
+     treat the map as a large cap (not its complement). Diagnostics will help
+     verify boundary coverage. */
   return ncap;
 }
 
@@ -1611,9 +1648,14 @@ static inline void mass_maps_accumulate_entry_pos(int s,
  *     MassMapNSIDE_current > 0 and MassMapNPIX > 0.
  *   - Overwrites any existing file (CFITSIO "!" prefix).
  *   - Two output modes controlled by MASS_MAPS_FULLSKY_OUTPUT:
- *       • FULLSKY: IMAGE HDU of length NPIX=npix_full (RING ordering implied).
- *       • CAP:     BINTABLE with explicit indexing (columns: PIXEL, SIGNAL)
- *                  where PIXEL runs 0..Ncap-1 and SIGNAL holds map values.
+ *       • FULLSKY: Dual-format output for maximum compatibility:
+ *           - Primary IMAGE HDU (length NPIX = npix_full, RING ordering)
+ *           - Secondary BINTABLE extension (EXTNAME='HEALPIX') with columns:
+ *             PIXEL (0..npix_full-1, EXPLICIT indexing) and TEMPERATURE (map values)
+ *         Healpy can read either the IMAGE or the BINTABLE path; providing both
+ *         avoids version-dependent ingestion issues.
+ *       • CAP:     BINTABLE with explicit indexing (columns: PIXEL, TEMPERATURE)
+ *                  where PIXEL runs 0..Ncap-1 and TEMPERATURE holds map values.
  *   - Adds HEALPix metadata (PIXTYPE=HEALPIX, ORDERING=RING, NSIDE, FIRSTPIX,
  *     LASTPIX) and PLC context (APERTURE, AXISV1/2/3). If available, also
  *     writes filter diagnostics via mass_maps_write_filter_keywords().
@@ -1653,6 +1695,7 @@ int mass_maps_write_segment_map(int s)
   }
   /* Choose output format: full-sky IMAGE or partial-sky BINTABLE (IMPLICIT indexing) */
 #if MASS_MAPS_FULLSKY_OUTPUT
+  /* Write full-sky map directly as primary IMAGE HDU (simplest for many healpy versions) */
   fits_create_img(fptr, DOUBLE_IMG, 1, naxes, &status);
   if (status)
   {
@@ -1661,7 +1704,6 @@ int mass_maps_write_segment_map(int s)
     return 1;
   }
   {
-    /* HEALPix metadata */
     char pixtype[] = "HEALPIX";
     char ordering[] = "RING";
     fits_update_key(fptr, TSTRING, "PIXTYPE", pixtype, "HEALPix pixelisation", &status);
@@ -1671,24 +1713,66 @@ int mass_maps_write_segment_map(int s)
     long lastpix = MassMapNPIX - 1;
     fits_update_key(fptr, TLONG, "FIRSTPIX", &firstpix, "First pixel number (0-based)", &status);
     fits_update_key(fptr, TLONG, "LASTPIX", &lastpix, "Last pixel number (0-based)", &status);
-    /* Additional context */
     fits_update_key(fptr, TDOUBLE, "APERTURE", &params.PLCAperture, "PLC cone aperture (deg)", &status);
     fits_update_key(fptr, TDOUBLE, "AXISV1", &plc.zvers[0], "PLC axis x-component", &status);
     fits_update_key(fptr, TDOUBLE, "AXISV2", &plc.zvers[1], "PLC axis y-component", &status);
     fits_update_key(fptr, TDOUBLE, "AXISV3", &plc.zvers[2], "PLC axis z-component", &status);
-    /* Filter metadata (if available) */
     mass_maps_write_filter_keywords(fptr, s);
   }
   {
-    /* Write data */
-    long fpixel = 1; /* FITS 1-based */
+    long fpixel = 1;
     long nelem = MassMapNPIX;
     fits_write_img(fptr, TDOUBLE, fpixel, nelem, map, &status);
+  }
+  /* Also provide a HEALPIX BINTABLE extension with explicit indexing and TEMPERATURE column */
+  if (!status)
+  {
+    int tfields = 2;
+    char *ttype[] = {"PIXEL", "TEMPERATURE"};
+    char *tform[] = {"1J", "1D"};
+    char *tunit[] = {"", ""};
+    long nrows = MassMapNPIX;
+    fits_create_tbl(fptr, BINARY_TBL, nrows, tfields, ttype, tform, tunit, "HEALPIX", &status);
+    if (!status)
+    {
+      char pixtype[] = "HEALPIX";
+      char ordering[] = "RING";
+      char idxschm[] = "EXPLICIT";
+      fits_update_key(fptr, TSTRING, "PIXTYPE", pixtype, "HEALPix pixelisation", &status);
+      fits_update_key(fptr, TSTRING, "ORDERING", ordering, "Pixel ordering scheme (RING)", &status);
+      fits_update_key(fptr, TINT, "NSIDE", &MassMapNSIDE_current, "HEALPix NSIDE", &status);
+      fits_update_key(fptr, TSTRING, "INDXSCHM", idxschm, "Indexing: EXPLICIT (PIXEL column)", &status);
+      long firstpix = 0;
+      long lastpix = MassMapNPIX - 1;
+      fits_update_key(fptr, TLONG, "FIRSTPIX", &firstpix, "First pixel number (0-based)", &status);
+      fits_update_key(fptr, TLONG, "LASTPIX", &lastpix, "Last pixel number (0-based)", &status);
+      fits_update_key(fptr, TDOUBLE, "APERTURE", &params.PLCAperture, "PLC cone aperture (deg)", &status);
+      fits_update_key(fptr, TDOUBLE, "AXISV1", &plc.zvers[0], "PLC axis x-component", &status);
+      fits_update_key(fptr, TDOUBLE, "AXISV2", &plc.zvers[1], "PLC axis y-component", &status);
+      fits_update_key(fptr, TDOUBLE, "AXISV3", &plc.zvers[2], "PLC axis z-component", &status);
+      mass_maps_write_filter_keywords(fptr, s);
+      /* Write columns */
+      long firstrow = 1;  /* 1-based */
+      long firstelem = 1; /* scalar */
+      long nelements = MassMapNPIX;
+      int *pix_index = (int *)malloc(sizeof(int) * (size_t)MassMapNPIX);
+      if (!pix_index)
+      {
+        fits_report_error(stderr, status);
+        fits_close_file(fptr, &status);
+        return 1;
+      }
+      for (long i = 0; i < MassMapNPIX; ++i)
+        pix_index[i] = (int)i;
+      fits_write_col(fptr, TINT, 1, firstrow, firstelem, nelements, pix_index, &status);
+      free(pix_index);
+      fits_write_col(fptr, TDOUBLE, 2, firstrow, firstelem, nelements, map, &status);
+    }
   }
 #else
   /* Partial-sky in a binary table; choose EXPLICIT indexing for broad compatibility */
   int tfields = 2;
-  char *ttype[] = {"PIXEL", "SIGNAL"};
+  char *ttype[] = {"PIXEL", "TEMPERATURE"};
   char *tform[] = {"1J", "1D"};
   char *tunit[] = {"", ""};
   long nrows = MassMapNPIX;
@@ -1722,7 +1806,7 @@ int mass_maps_write_segment_map(int s)
     mass_maps_write_filter_keywords(fptr, s);
   }
   {
-    /* Write columns: PIXEL (0..Ncap-1) and SIGNAL */
+    /* Write columns: PIXEL (0..Ncap-1) and TEMPERATURE */
     long firstrow = 1;  /* 1-based */
     long firstelem = 1; /* scalar */
     long nelements = MassMapNPIX;
@@ -2408,6 +2492,11 @@ int mass_maps_particle_sign_change(int rep_id,
  **/
 void mass_maps_process_segment(int segment_index, double z_segment, int is_first_segment)
 {
+  /* Reset cap diagnostics per segment */
+  MassMapCapPrefixMiss = 0ULL;
+  MassMapCapMissAngleMax = 0.0;
+  MassMapCapAcceptAngleMax = 0.0;
+
   /* Ensure ZACC values are available in products when filtering uncollapsed-only */
 #if defined(MASS_MAPS_FILTER_UNCOLLAPSED)
 #if defined(SNAPSHOT)
@@ -2978,6 +3067,17 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                       {
                         if ((unsigned long)ipix < (unsigned long)MassMapNPIX)
                         {
+                          if (MassMapCapDiagActive)
+                          {
+                            double ang = mass_maps_angle_deg_from_pos(entry_pos);
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+                            {
+                              if (ang > MassMapCapAcceptAngleMax)
+                                MassMapCapAcceptAngleMax = ang;
+                            }
+                          }
                           if (LocalMap)
                           {
                             LocalMap[ipix] += 1.0;
@@ -2994,6 +3094,22 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                         else
                         {
                           ipix_oob_local++;
+                          if (MassMapCapDiagActive)
+                          {
+                            double ang = mass_maps_angle_deg_from_pos(entry_pos);
+                            /* Track misses inside aperture but outside prefix */
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                            MassMapCapPrefixMiss++;
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+                            {
+                              if (ang > MassMapCapMissAngleMax)
+                                MassMapCapMissAngleMax = ang;
+                            }
+                          }
                         }
                       }
                     }
@@ -3141,10 +3257,36 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
 #pragma omp atomic update
 #endif
                           map[ipix] += 1.0;
+                          if (MassMapCapDiagActive)
+                          {
+                            double ang = mass_maps_angle_deg_from_pos(entry_pos);
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+                            {
+                              if (ang > MassMapCapAcceptAngleMax)
+                                MassMapCapAcceptAngleMax = ang;
+                            }
+                          }
                         }
                         else
                         {
                           ipix_oob_local++;
+                          if (MassMapCapDiagActive)
+                          {
+                            double ang = mass_maps_angle_deg_from_pos(entry_pos);
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                            MassMapCapPrefixMiss++;
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+                            {
+                              if (ang > MassMapCapMissAngleMax)
+                                MassMapCapMissAngleMax = ang;
+                            }
+                          }
                         }
                       }
                     }
