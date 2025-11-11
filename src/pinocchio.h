@@ -654,6 +654,8 @@ int compute_LPT_displacements(int, double);
 /* prototypes for functions defined in distribute.c */
 int distribute(void);
 int distribute_back(void);
+int my_distribute_back(void);
+int distribute_back_alltoall(void);
 
 /* prototypes for functions defined in fragment.c */
 int fragment_driver(void);

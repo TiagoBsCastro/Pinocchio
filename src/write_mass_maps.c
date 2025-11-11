@@ -585,6 +585,8 @@ static void mass_maps_write_filter_keywords(fitsfile *fptr, int segment_index)
 #ifdef SNAPSHOT
 /* Forward declaration: back-distribute ZACC (and group_ID) from fragment sub-boxes to products FFT tiles */
 int distribute_back(void);
+int my_distribute_back(void);
+int distribute_back_alltoall(void);
 #endif
 
 /* Optional matching diagnostics: relate excluded entries to PLC halo catalog */
@@ -2580,12 +2582,86 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
     /* Do back-distribution at EACH segment, as fragmentation updates across segments
        can assign new halo memberships and zacc values. This ensures the filter and
        matching diagnostics see up-to-date products[].zacc and products[].group_ID. */
-    if (!ThisTask && internal.verbose_level >= VDBG)
-      printf("[%s] MASS_MAPS(filter): distributing ZACC/group_ID to products for segment %d\n", fdate(), segment_index);
-    int rc = distribute_back();
-    if (rc && !ThisTask)
+    const char *method = getenv("PINOCCHIO_BACKDIST");
+    double t_start, t_stop;
+
+    if (method && strcmp(method, "bench") == 0)
     {
-      fprintf(stderr, "[%s] MASS_MAPS(filter) WARNING: distribute_back() failed; ZACC may be unset (=-1) and the filter will include all.\n", fdate());
+      if (!ThisTask && internal.verbose_level >= VDBG)
+        printf("[%s] MASS_MAPS(filter): benchmarking back-distribution variants for segment %d\n", fdate(), segment_index);
+
+      int rc_orig = 0, rc_round = 0, rc_all = 0;
+      double dt_orig = 0.0, dt_round = 0.0, dt_all = 0.0;
+
+      MPI_Barrier(MPI_COMM_WORLD);
+      t_start = MPI_Wtime();
+      rc_orig = distribute_back();
+      MPI_Barrier(MPI_COMM_WORLD);
+      t_stop = MPI_Wtime();
+      dt_orig = t_stop - t_start;
+
+      MPI_Barrier(MPI_COMM_WORLD);
+      t_start = MPI_Wtime();
+      rc_round = my_distribute_back();
+      MPI_Barrier(MPI_COMM_WORLD);
+      t_stop = MPI_Wtime();
+      dt_round = t_stop - t_start;
+
+      MPI_Barrier(MPI_COMM_WORLD);
+      t_start = MPI_Wtime();
+      rc_all = distribute_back_alltoall();
+      MPI_Barrier(MPI_COMM_WORLD);
+      t_stop = MPI_Wtime();
+      dt_all = t_stop - t_start;
+
+      if (!ThisTask)
+        printf("[%s] MASS_MAPS(filter): back-distribution timings (segment %d): original=%.6fs roundrobin=%.6fs alltoall=%.6fs\n",
+               fdate(), segment_index, dt_orig, dt_round, dt_all);
+
+      if (!ThisTask && (rc_orig || rc_round || rc_all))
+        fprintf(stderr, "[%s] MASS_MAPS(filter) WARNING: one or more back-distribution variants failed (orig=%d round=%d all=%d); ZACC may be incomplete.\n",
+                fdate(), rc_orig, rc_round, rc_all);
+    }
+    else
+    {
+      int rc = 0;
+      const char *label = NULL;
+
+      if (method && strcmp(method, "original") == 0)
+      {
+        label = "original";
+        MPI_Barrier(MPI_COMM_WORLD);
+        t_start = MPI_Wtime();
+        rc = distribute_back();
+        MPI_Barrier(MPI_COMM_WORLD);
+        t_stop = MPI_Wtime();
+      }
+      else if (method && strcmp(method, "round") == 0)
+      {
+        label = "roundrobin";
+        MPI_Barrier(MPI_COMM_WORLD);
+        t_start = MPI_Wtime();
+        rc = my_distribute_back();
+        MPI_Barrier(MPI_COMM_WORLD);
+        t_stop = MPI_Wtime();
+      }
+      else
+      {
+        /* default to alltoall */
+        label = "alltoall";
+        MPI_Barrier(MPI_COMM_WORLD);
+        t_start = MPI_Wtime();
+        rc = distribute_back_alltoall();
+        MPI_Barrier(MPI_COMM_WORLD);
+        t_stop = MPI_Wtime();
+      }
+
+      if (!ThisTask)
+        printf("[%s] MASS_MAPS(filter): back-distribution timing (segment %d, %s)=%.6fs\n",
+               fdate(), segment_index, label, (t_stop - t_start));
+      if (rc && !ThisTask)
+        fprintf(stderr, "[%s] MASS_MAPS(filter) WARNING: back-distribution (%s) failed; ZACC may be unset (=-1) and the filter will include all.\n",
+                fdate(), label);
     }
 #ifdef MASS_MAPS_MATCH_DIAG
     /* After back-distribution, estimate coverage of group_ID and zacc on this task */
