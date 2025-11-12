@@ -20,7 +20,7 @@ PrimordialIndex        0            % n_s
 DEw0                   -1.0         % w0 of parametric dark energy equation of state
 DEwa                   0.0          % wa of parametric dark energy equation of state
 TabulatedEoSfile       no           % equation of state of dark energy tabulated in a file
-FileWithInputSpectrum  CAMBTable  
+FileWithInputSpectrum  CAMBFiles/pk_cb_099.dat
 
 # from N-GenIC
 InputSpectrum_UnitLength_in_cm 0    % units of tabulated P(k), or 0 if it is in h/Mpc
@@ -45,9 +45,9 @@ AnalyticMassFunction   9            % form of analytic mass function given in th
 % DoNotWriteHistories               % skips the writing of merger histories
 
 # past light cone
-StartingzForPLC        2.0          % starting (highest) redshift for the past light cone
+StartingzForPLC        0.1          % starting (highest) redshift for the past light cone
 LastzForPLC            0.0          % final (lowest) redshift for the past light cone
-PLCAperture            1.0          % cone aperture for the past light cone
+PLCAperture            180          % cone aperture for the past light cone
 PLCProvideConeData                  % read vertex and direction of cone from paramter file
 PLCCenter 500  500 500              % cone vertex in the same coordinates as the BoxSize
 PLCAxis   0. 0. 1.                  % un-normalized direction of the cone axis
@@ -58,6 +58,6 @@ MassMapNSIDE           256          % NSIDE for healpix mass maps
 % CTtableFile  none
 
 # CAMB PK tables, needed if the code is compiled with READ_PK_TABLE
-CAMBMatterFile      CAMBFiles/pk_cb         % label for matter power spectrum files (CDM+Baryons)
-CAMBRedshiftsFile   CAMBFiles/redshifts.dat % list of redshifts for the Pk table
+#CAMBMatterFile      CAMBFiles/pk_cb         % label for matter power spectrum files (CDM+Baryons)
+#CAMBRedshiftsFile   CAMBFiles/redshifts.dat % list of redshifts for the Pk table
 HubbleTableFile     CAMBFiles/hubble.dat    % Hubble table file

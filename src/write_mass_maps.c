@@ -1,67 +1,39 @@
-/**
- * MASS_MAPS: per-segment PLC entries → HEALPix maps (products-only)
- * -----------------------------------------------------------------
- * Purpose
- *   Detect entries of mass elements into a past light-cone (PLC) between adjacent
- *   fragmentation outputs and accumulate counts on one HEALPix map per segment.
+/*
+ * MASS_MAPS: per-segment PLC entries -> HEALPix maps (products-only)
+ * ------------------------------------------------------------------
+ * Detect entries of mass elements into a past light-cone (PLC) between adjacent
+ * fragmentation outputs and accumulate counts on one HEALPix map per segment.
  *
- * High-level flow (per segment)
- *   1) Build candidate replications by radial overlap with the segment chi-span.
- *   2) Optionally partition local Lagrangian tile into blocks and apply conservative
- *      culls (radial shell + angular bound) before touching particles.
- *   3) Traverse particles for passing block/replication pairs; detect PLC entry with
- *      H = chi(z) − r sign change, interpolate entry position, gate by aperture,
- *      pixelize, and accumulate.
- *   4) MPI-reduce per-rep counters and maps; write one FITS per segment.
+ * Pipeline (high level):
+ *   - Cheap, conservative block-level culls (radial shell; conservative angular bound) before touching particles.
+ *   - For passing blocks/particles, compute previous/current Eulerian positions (q + LPT displacements),
+ *     detect PLC boundary crossings via H = chi(z) - r sign change, interpolate the entry position,
+ *     perform pixel-based angular selection (see below), and accumulate into the map.
  *
- * Requirements and interplay with other modules
- *   - Requires: PLC, RECOMPUTE_DISPLACEMENTS, HAVE_CFITSIO (enforced below).
- *   - Uses SNAPSHOT structures when MASS_MAPS_FILTER_UNCOLLAPSED is enabled.
- *   - Displacements between segments:
- *       • If SCALE_DEPENDENT (or READ_PK_TABLE/MOD_GRAV_FR) is defined, derivatives are
- *         recomputed each segment via FFTs (fragment.c → compute_displacements).
- *       • Otherwise (scale-independent ΛCDM), per-particle displacements are rescaled
- *         between segments using k-independent growth factors (fast path, no FFTs).
+ * Angular selection (pixel-based):
+ *   - Convert the entry position to a HEALPix pixel at the configured NSIDE using the PLC-oriented basis.
+ *   - For partial sky (aperture < 180 deg), accept iff the pixel index lies in the cap prefix [0 .. Ncap-1]
+ *     in RING ordering. This matches downstream "bins populated" semantics (mm!=UNSEEN).
+ *   - For full sky, all pixels are accepted.
+ *   - The previous geometric angle test is retained only for diagnostics (see mass_maps_entry_inside_aperture).
  *
- * Key runtime parameters (from parameter file)
- *   - PLCAperture [deg]: Angular radius of the PLC cone; <180 selects a spherical cap map.
- *   - PLC axis/center: Provided by PLC setup; used for pixelization basis and origin.
+ * Configuration overview:
+ *   - PLC                       Enable past-light-cone logic (required).
+ *   - MASS_MAPS                 Enable mass maps (segment accumulation and FITS output).
+ *   - PLCAperture [deg]         Angular radius of the PLC cone; <180 selects a spherical cap map.
+ *   - PLC axis/center           Provided by PLC setup; used for pixelization basis and origin.
+ *   - NSIDE                     HEALPix resolution for maps (RING ordering).
+ *   - MASS_MAPS_* toggles:
+ *       MASS_MAPS_FULLSKY_OUTPUT   If nonzero, also write full-sky IMAGE HDU even when aperture<180 (default 0).
+ *       MASS_MAPS_CAP_DIAG         Emit cap-boundary diagnostics (prefix misses and angle extrema).
+ *       MASS_MAPS_THREAD_ACCUM     Use per-thread HEALPix accumulators and merge at the end to reduce atomics.
  *
- * Compile-time directives (macros) and what they control
- *   Core feature flags
- *     - MASS_MAPS                 Enable mass-maps module (this file).
- *     - PLC                       Enable past-light-cone logic (required).
- *     - RECOMPUTE_DISPLACEMENTS  Maintain prev/curr segment fields for interpolation (required).
- *     - HAVE_CFITSIO             Enable FITS output (required).
- *     - SNAPSHOT                 Provide product fields used by optional filters.
- *
- *   Optional behavior
- *     - MASS_MAPS_FILTER_UNCOLLAPSED   Include only entries with z_plc > z_acc (requires SNAPSHOT).
- *     - MASS_MAPS_MATCH_DIAG           Extra diagnostics to reconcile entries with PLC halo catalog.
- *     - MASS_MAPS_FULLSKY_OUTPUT       If nonzero, also write full-sky IMAGE HDU even when aperture<180 (default 0).
- *
- *   Lagrangian sub-volume culling (performance)
- *     - MASS_MAPS_BLOCKS[_X|_Y|_Z]     Number of Lagrangian blocks per axis (>=1). Default: 8 per axis.
- *     - MASS_MAPS_VARPAD_FACTOR        Variable AABB padding factor (dimensionless). Default: 20.0.
- *                                       Units and conversion:
- *                                         • Model is defined in Mpc/h: pad_h = FACTOR * (sigma8/0.8)^{1.5} / (1+z)
- *                                         • Internally we work in true Mpc (positions use InterPartDist in Mpc),
- *                                           so we convert pad_phys = pad_h / Hubble100.
- *                                         • For histogram/header convenience, we report both PAD_PHYS(Mpc) and
- *                                           PAD_PHYS(Mpc/h), and also PAD_CELLS = PAD_PHYS(Mpc)/InterPartDist(Mpc).
- *     - MASS_MAPS_VARPAD_WARN_FRAC     Warn on last segment if |x(q,z)-q| exceeds pad for more than this fraction. Default: 0.05.
-
- *
- *   Threading and parallelism
- *     - MASS_MAPS_THREAD_ACCUM       Use per-thread HEALPix accumulators and merge at the end to reduce atomics.
- *     - USE_FFT_THREADS              Enable FFTW threading for FFT phases (independent of mass-maps loops).
- *
- * Output and diagnostics
- *   - For partial-sky (aperture<180), a RING-ordered spherical cap with Ncap pixels is produced.
+ * Output geometry:
+ *   - Full-sky (aperture=180): a full-sphere RING map with NPIX = 12*NSIDE^2.
+ *   - Partial-sky (aperture<180): a RING-ordered spherical cap with Ncap pixels (prefix 0..Ncap-1).
  *     If the computed Ncap is 0 (too small aperture for the chosen NSIDE), maps are disabled with a warning.
- *   - FITS headers include provenance and filter stats when enabled:
- *       FILTER='ZPLC>ZACC', ZF_CONS/ZF_EXCL/ZF_INCL/ZF_FEXCL, APERTURE, and map geometry.
- **/
+ *   - FITS headers include basic HEALPix metadata, PLC axis (unit vector), FILTER state, and map geometry.
+ */
 #include "pinocchio.h"
 #ifdef MASS_MAPS
 #include <math.h>
@@ -795,17 +767,21 @@ static inline void mass_maps_cache_plc_basis_and_center(void)
  * mass_maps_entry_inside_aperture
  * -------------------------------
  * Purpose
- *   Test whether an absolute position (physical units) lies inside the PLC
- *   angular aperture (spherical cap) centered on the PLC axis.
+ *   Geometric angle check for whether an absolute position lies inside the PLC
+ *   spherical-cap aperture (diagnostics only).
+ *
+ * Current selection semantics
+ *   - Mass-map accumulation now uses pixel-based selection: entries are kept
+ *     iff their HEALPix pixel is within the cap prefix [0..Ncap-1]. This function
+ *     is retained for diagnostics and optional instrumentation.
  *
  * Parameters
  *   - pos  Absolute position in true Mpc (same units as InterPartDist-scaled
  *           positions elsewhere in mass-maps).
  *
  * Returns
- *   1 if the angle between (pos - PLC_center) and the PLC axis (plc.zvers)
- *   is <= params.PLCAperture [deg]; otherwise 0. Returns 0 for the degenerate
- *   case where the vector from center has zero length.
+ *   1 if the geometric angle test passes (angle <= PLCAperture); otherwise 0.
+ *   Returns 0 for the degenerate case where |pos − center| == 0.
  *
  * Notes
  *   - Uses the cached center/basis via mass_maps_cache_plc_basis_and_center().
@@ -1787,6 +1763,10 @@ int mass_maps_write_segment_map(int s)
     fits_update_key(fptr, TLONG, "FIRSTPIX", &firstpix, "First pixel number (0-based)", &status);
     fits_update_key(fptr, TLONG, "LASTPIX", &lastpix, "Last pixel number (0-based)", &status);
     fits_update_key(fptr, TDOUBLE, "APERTURE", &params.PLCAperture, "PLC cone aperture (deg)", &status);
+    {
+      char seltype[32] = "PIXEL_CAP_PREFIX";
+      fits_update_key(fptr, TSTRING, "SELTYPE", seltype, "Angular selection mode", &status);
+    }
     fits_update_key(fptr, TDOUBLE, "AXISV1", &plc.zvers[0], "PLC axis x-component", &status);
     fits_update_key(fptr, TDOUBLE, "AXISV2", &plc.zvers[1], "PLC axis y-component", &status);
     fits_update_key(fptr, TDOUBLE, "AXISV3", &plc.zvers[2], "PLC axis z-component", &status);
@@ -1820,6 +1800,10 @@ int mass_maps_write_segment_map(int s)
       fits_update_key(fptr, TLONG, "FIRSTPIX", &firstpix, "First pixel number (0-based)", &status);
       fits_update_key(fptr, TLONG, "LASTPIX", &lastpix, "Last pixel number (0-based)", &status);
       fits_update_key(fptr, TDOUBLE, "APERTURE", &params.PLCAperture, "PLC cone aperture (deg)", &status);
+      {
+        char seltype[32] = "PIXEL_CAP_PREFIX";
+        fits_update_key(fptr, TSTRING, "SELTYPE", seltype, "Angular selection mode", &status);
+      }
       fits_update_key(fptr, TDOUBLE, "AXISV1", &plc.zvers[0], "PLC axis x-component", &status);
       fits_update_key(fptr, TDOUBLE, "AXISV2", &plc.zvers[1], "PLC axis y-component", &status);
       fits_update_key(fptr, TDOUBLE, "AXISV3", &plc.zvers[2], "PLC axis z-component", &status);
@@ -1872,6 +1856,10 @@ int mass_maps_write_segment_map(int s)
     fits_update_key(fptr, TLONG, "LASTPIX", &lastpix, "Last pixel number (0-based)", &status);
     /* Context: PLC geometry */
     fits_update_key(fptr, TDOUBLE, "APERTURE", &params.PLCAperture, "PLC cone aperture (deg)", &status);
+    {
+      char seltype[32] = "PIXEL_CAP_PREFIX";
+      fits_update_key(fptr, TSTRING, "SELTYPE", seltype, "Angular selection mode", &status);
+    }
     fits_update_key(fptr, TDOUBLE, "AXISV1", &plc.zvers[0], "PLC axis x-component", &status);
     fits_update_key(fptr, TDOUBLE, "AXISV2", &plc.zvers[1], "PLC axis y-component", &status);
     fits_update_key(fptr, TDOUBLE, "AXISV3", &plc.zvers[2], "PLC axis z-component", &status);
@@ -3199,9 +3187,15 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                     double entry_pos[3];
                     if (!mass_maps_crossing_from_shifted_positions(Pprev, Pcurr, c_phys, chi_prev_seg, chi_curr_seg, NULL, entry_pos))
                       continue;
-                    /* Angular aperture: only accumulate entries inside PLC cone */
-                    if (!mass_maps_entry_inside_aperture(entry_pos))
+                    /* Pixel-based angular selection: compute target pixel and keep only if inside cap */
+                    long ipix_sel;
+                    if (!mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, &ipix_sel))
                       continue;
+                    if (params.PLCAperture < 180.0)
+                    {
+                      if (!((unsigned long)ipix_sel < (unsigned long)MassMapNCAP))
+                        continue; /* outside cone */
+                    }
 #ifdef MASS_MAPS_FILTER_UNCOLLAPSED
                     {
                       /* Filter: include only if ZPLC > ZACC */
@@ -3374,9 +3368,15 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                     double entry_pos[3];
                     if (!mass_maps_crossing_from_shifted_positions(Pprev, Pcurr, c_phys, chi_prev_seg, chi_curr_seg, NULL, entry_pos))
                       continue;
-                    /* Angular aperture: only accumulate entries inside PLC cone */
-                    if (!mass_maps_entry_inside_aperture(entry_pos))
+                    /* Pixel-based angular selection: compute target pixel and keep only if inside cap */
+                    long ipix_sel;
+                    if (!mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, &ipix_sel))
                       continue;
+                    if (params.PLCAperture < 180.0)
+                    {
+                      if (!((unsigned long)ipix_sel < (unsigned long)MassMapNCAP))
+                        continue;
+                    }
 #ifdef MASS_MAPS_FILTER_UNCOLLAPSED
                     {
                       double dx = entry_pos[0] - c_phys[0];
@@ -3448,8 +3448,8 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                     local_cross++;
                     if (s_map >= 0 && s_map < NMassSheets && MassMapNSIDE_current > 0)
                     {
-                      long ipix;
-                      if (mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, &ipix))
+                      /* Use previously selected pixel */
+                      long ipix = ipix_sel;
                       {
                         if ((unsigned long)ipix < (unsigned long)MassMapNPIX)
                         {
@@ -3620,8 +3620,15 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
             double entry_pos[3];
             if (!mass_maps_crossing_from_shifted_positions(Pprev, Pcurr, c_phys, chi_prev_seg, chi_curr_seg, NULL, entry_pos))
               continue;
-            if (!mass_maps_entry_inside_aperture(entry_pos))
+            /* Pixel-based angular selection */
+            long ipix_sel;
+            if (!mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, &ipix_sel))
               continue;
+            if (params.PLCAperture < 180.0)
+            {
+              if (!((unsigned long)ipix_sel < (unsigned long)MassMapNCAP))
+                continue;
+            }
 #ifdef MASS_MAPS_FILTER_UNCOLLAPSED
             {
               double dx = entry_pos[0] - c_phys[0];
