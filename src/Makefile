@@ -99,7 +99,8 @@ OPTIONS += -DSNAPSHOT
 # -DRECOMPUTE_DISPLACEMENTS    Maintain prev/curr segment fields (needed for PLC crossings).
 # -DREAD_HUBBLE_TABLE          Read H(z) table for precise distances.
 # -DMASS_MAPS_MATCH_DIAG       Extra cross-matching diagnostics (debug).
-#
+OPTIONS += -DMASS_MAPS_MATCH_DIAG
+
 # f(R) gravity:
 # -DMOD_GRAV_FR                Enable modified gravity model (f(R)).
 # -DFR0=1.e-8                  Example FR parameter value.

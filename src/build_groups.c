@@ -913,6 +913,14 @@ through the PLC since last time */
 
     if (this_z != nstep - 1 && frag[iz].Fmax < zstop + 1.0)
     {
+#ifdef SNAPSHOT
+      /* Keep frag[].group_ID in sync with current group_ID before pausing */
+      groups[0].name = 0;
+      groups[FILAMENT].name = FILAMENT;
+      for (int iz2 = 0; iz2 < subbox.Nstored; iz2++)
+        frag[iz2].group_ID = groups[group_ID[iz2]].name;
+#endif
+
       if (!ThisTask)
         printf("[%s] Pausing fragmentation process\n", fdate());
       last_z = this_z + 1;
