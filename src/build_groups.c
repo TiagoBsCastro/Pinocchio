@@ -531,7 +531,7 @@ int build_groups(int Npeaks, double zstop, int first_call)
 
       group_ID[iz] = ngroups;
       linking_list[iz] = iz;
-      if (params.MinHaloMass == 1)
+      if (params.MinHaloMass == 1 && groups[ngroups].good)
       {
         groups[ngroups].t_appear = frag[iz].Fmax;
 #ifdef SNAPSHOT
@@ -1114,7 +1114,9 @@ void merge_groups(int grp1, int grp2, PRODFLOAT time)
   /* updates zacc of particles in case one of the halos (or both)
      was below the MinHaloMass threshold but the merged halo is above
      the threshold */
-  if ((groups[grp1].t_appear == -1 || groups[grp2].t_appear == -1) && (groups[grp1].Mass + groups[grp2].Mass >= params.MinHaloMass))
+  if (groups[grp1].good &&
+      (groups[grp1].t_appear == -1 || groups[grp2].t_appear == -1) &&
+      (groups[grp1].Mass + groups[grp2].Mass >= params.MinHaloMass))
   {
     if (groups[grp1].t_appear == -1)
     {
@@ -1239,7 +1241,9 @@ void accretion(int group, int i, int j, int k, int indx, PRODFLOAT F)
   set_group(group, &obj1);
 
   /* if the group goes above the MinHaloMass threshold, set its appearing time */
-  if (groups[group].Mass >= params.MinHaloMass && groups[group].t_appear == -1)
+  if (groups[group].good &&
+      groups[group].Mass >= params.MinHaloMass &&
+      groups[group].t_appear == -1)
   {
     groups[group].t_appear = F;
 
@@ -1264,7 +1268,7 @@ void accretion(int group, int i, int j, int k, int indx, PRODFLOAT F)
 
 #ifdef SNAPSHOT
   /* accretion redshift */
-  if (groups[group].Mass >= params.MinHaloMass)
+  if (groups[group].good && groups[group].Mass >= params.MinHaloMass)
     frag[indx].zacc = F - 1.0;
 #endif
 }

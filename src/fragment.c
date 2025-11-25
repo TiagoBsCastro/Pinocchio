@@ -223,9 +223,11 @@ int fragment()
 
       if (!ThisTask)
       {
-        printf("[%s] Requesting %Ld particles from the boundary layer\n", fdate(), nadd_all[0]);
+        printf("[%s] Requesting %llu particles from the boundary layer\n",
+               fdate(), (unsigned long long)nadd_all[0]);
         if (nadd_all[1])
-          printf("WARNING: %Ld requested particles lie beyond the boundary layer, some halos may be inaccurate\n", nadd_all[1]);
+          printf("WARNING: %llu requested particles lie beyond the boundary layer, some halos may be inaccurate\n",
+                 (unsigned long long)nadd_all[1]);
       }
     }
 
