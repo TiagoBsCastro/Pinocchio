@@ -561,95 +561,6 @@ int my_distribute_back(void);
 int distribute_back_alltoall(void);
 #endif
 
-/* Optional matching diagnostics: relate excluded entries to PLC halo catalog */
-#ifdef MASS_MAPS_MATCH_DIAG
-static int mass_maps_matchdiag_inited = 0;
-static unsigned long long *mass_maps_plc_names = NULL;
-static int mass_maps_plc_n = 0;
-
-/**
- * cmp_ull
- * -------
- * Purpose
- *   qsort/bsearch comparator for unsigned long long values. Used to sort and
- *   later binary-search the list of PLC group unique names when matching
- *   entries against the PLC halo catalog for diagnostics.
- *
- * Parameters
- *   - a, b  Pointers to elements to compare (each points to an unsigned long long).
- *
- * Returns
- *   -1 if *a < *b, 0 if equal, +1 if *a > *b.
- */
-static int cmp_ull(const void *a, const void *b)
-{
-  unsigned long long aa = *(const unsigned long long *)a;
-  unsigned long long bb = *(const unsigned long long *)b;
-  return (aa < bb) ? -1 : (aa > bb) ? 1
-                                    : 0;
-}
-
-/**
- * mass_maps_matchdiag_init
- * ------------------------
- * Purpose
- *   One-time initializer for MASS_MAPS_MATCH_DIAG. Builds a sorted array of
- *   PLC halo unique names (plcgroups[i].name) sized to plc.Nstored, so that
- *   group membership tests can use bsearch in O(log N).
- *
- * Behavior
- *   - Allocates mass_maps_plc_names and fills it from plcgroups.
- *   - Sorts via qsort with cmp_ull.
- *   - Sets mass_maps_matchdiag_inited = 1 to guard repeated work.
- *   - If allocation fails or no PLC groups exist, leaves list null/empty.
- */
-static void mass_maps_matchdiag_init(void)
-{
-  if (mass_maps_matchdiag_inited)
-    return;
-  /* Build a sorted list of PLC group names for fast membership testing */
-  if (plc.Nstored > 0 && plcgroups)
-  {
-    mass_maps_plc_n = plc.Nstored;
-    mass_maps_plc_names = (unsigned long long *)malloc(sizeof(unsigned long long) * (size_t)mass_maps_plc_n);
-    if (mass_maps_plc_names)
-    {
-      for (int i = 0; i < mass_maps_plc_n; ++i)
-        mass_maps_plc_names[i] = plcgroups[i].name;
-      qsort(mass_maps_plc_names, (size_t)mass_maps_plc_n, sizeof(unsigned long long), cmp_ull);
-    }
-  }
-  mass_maps_matchdiag_inited = 1;
-}
-
-/**
- * mass_maps_group_in_plc_by_id
- * ----------------------------
- * Purpose
- *   Check whether a given group_ID corresponds to a halo present in the PLC
- *   catalog, using the pre-built sorted list of PLC unique names.
- *
- * Parameters
- *   - gid  Group identifier (index into groups[]); gid <= 0 returns 0.
- *
- * Returns
- *   1 if the group's unique name is found in the PLC list, else 0. If the
- *   matching list is not initialized or empty, returns 0.
- */
-static inline int mass_maps_group_in_plc_by_id(int gid)
-{
-  if (gid <= 0)
-    return 0;
-  if (!mass_maps_matchdiag_inited)
-    mass_maps_matchdiag_init();
-  if (!mass_maps_plc_names || mass_maps_plc_n <= 0)
-    return 0;
-  /* Lookup by unique group name */
-  unsigned long long key = groups[gid].name;
-  return bsearch(&key, mass_maps_plc_names, (size_t)mass_maps_plc_n, sizeof(unsigned long long), cmp_ull) != NULL;
-}
-#endif /* MASS_MAPS_MATCH_DIAG */
-
 /* Local constants */
 #ifndef MASS_MAPS_Z_EPS
 #define MASS_MAPS_Z_EPS 1e-8
@@ -2779,15 +2690,6 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
   double zacc_min_global = 0.0, zacc_max_global = 0.0;
   unsigned long long zplc_out_of_segment_local = 0ULL;
   unsigned long long zplc_out_of_segment_global = 0ULL;
-#ifdef MASS_MAPS_MATCH_DIAG
-  /* Matching diagnostics */
-  unsigned long long excl_with_group_local = 0ULL;
-  unsigned long long excl_with_plcgroup_local = 0ULL;
-  unsigned long long cons_with_plcgroup_local = 0ULL;
-  unsigned long long excl_with_group_global = 0ULL;
-  unsigned long long excl_with_plcgroup_global = 0ULL;
-  unsigned long long cons_with_plcgroup_global = 0ULL;
-#endif
 #endif
   /* Store local per-rep counts to reduce in one shot */
   unsigned long long *rep_crossings_local = NULL;
@@ -3386,13 +3288,6 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                       double z_plc = InverseComovingDistance(r_entry);
 #ifdef SNAPSHOT
                       double z_acc = mass_maps_get_zacc_global(ig, jg, kg);
-#ifdef MASS_MAPS_MATCH_DIAG
-                      int gid = mass_maps_get_group_id_global(ig, jg, kg);
-                      if (gid > 0 && mass_maps_group_in_plc_by_id(gid))
-                      {
-                        cons_with_plcgroup_local++;
-                      }
-#endif
 #ifdef _OPENMP
 #pragma omp atomic update
 #endif
@@ -3430,14 +3325,6 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
 #pragma omp atomic update
 #endif
                         zfilter_excluded_local++;
-#ifdef MASS_MAPS_MATCH_DIAG
-                        if (gid > 0)
-                        {
-                          excl_with_group_local++;
-                          if (mass_maps_group_in_plc_by_id(gid))
-                            excl_with_plcgroup_local++;
-                        }
-#endif
                         continue;
                       }
 #else
@@ -3638,17 +3525,6 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
               double z_plc = InverseComovingDistance(r_entry);
 #ifdef SNAPSHOT
               double z_acc = mass_maps_get_zacc_global(ig, jg, kg);
-#ifdef MASS_MAPS_MATCH_DIAG
-              int gid = mass_maps_get_group_id_global(ig, jg, kg);
-              if (gid > 0 && mass_maps_group_in_plc_by_id(gid))
-              {
-                /* Count considered entries whose group is present in PLC */
-#ifdef _OPENMP
-#pragma omp atomic update
-#endif
-                cons_with_plcgroup_local++;
-              }
-#endif
 #ifdef _OPENMP
 #pragma omp atomic update
 #endif
@@ -3686,22 +3562,6 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
 #pragma omp atomic update
 #endif
                 zfilter_excluded_local++;
-#ifdef MASS_MAPS_MATCH_DIAG
-                if (gid > 0)
-                {
-#ifdef _OPENMP
-#pragma omp atomic update
-#endif
-                  excl_with_group_local++;
-                  if (mass_maps_group_in_plc_by_id(gid))
-                  {
-#ifdef _OPENMP
-#pragma omp atomic update
-#endif
-                    excl_with_plcgroup_local++;
-                  }
-                }
-#endif
                 continue;
               }
 #else
@@ -3787,11 +3647,6 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
   MPI_Reduce(&zacc_min_local, &zacc_min_global, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
   MPI_Reduce(&zacc_max_local, &zacc_max_global, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
   MPI_Reduce(&zplc_out_of_segment_local, &zplc_out_of_segment_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
-#ifdef MASS_MAPS_MATCH_DIAG
-  MPI_Reduce(&excl_with_group_local, &excl_with_group_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
-  MPI_Reduce(&excl_with_plcgroup_local, &excl_with_plcgroup_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
-  MPI_Reduce(&cons_with_plcgroup_local, &cons_with_plcgroup_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
-#endif
   if (!ThisTask && internal.verbose_level >= VDIAG)
   {
     unsigned long long zf_included = (zfilter_considered_global >= zfilter_excluded_global)
@@ -3823,19 +3678,6 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
              zplc_min_global, zplc_max_global,
              zacc_min_global, zacc_max_global,
              zplc_out_of_segment_global);
-#ifdef MASS_MAPS_MATCH_DIAG
-    if (internal.verbose_level >= VDBG && zfilter_considered_global > 0ULL)
-    {
-      double frac_cons_plc = (double)cons_with_plcgroup_global / (double)zfilter_considered_global;
-      double frac_excl_grp = (double)excl_with_group_global / (double)zfilter_excluded_global;
-      double frac_excl_plc = (double)excl_with_plcgroup_global / (double)zfilter_excluded_global;
-      printf("[%s] MASS_MAPS(match): seg %d considered_with_plcgroup=%llu (%.2f%% of considered)  excluded_with_group=%llu (%.2f%% of excluded)  excluded_with_plcgroup=%llu (%.2f%% of excluded)\n",
-             fdate(), segment_index,
-             cons_with_plcgroup_global, 100.0 * frac_cons_plc,
-             excl_with_group_global, 100.0 * frac_excl_grp,
-             excl_with_plcgroup_global, 100.0 * frac_excl_plc);
-    }
-#endif
   }
 #endif
 
