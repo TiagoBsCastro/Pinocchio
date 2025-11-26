@@ -388,6 +388,17 @@ int fragment()
       cputime.group += tmp;
       if (!ThisTask)
         printf("[%s] Quick fragmentation done, cputime = %14.6f\n", fdate(), tmp);
+
+#ifdef SNAPSHOT
+      /* Reset any zacc values written during quick_build_groups.
+         The full fragmentation run below will recompute halo
+         memberships and accretion times consistently. */
+      {
+        size_t nfrag = memory.frag_prods / sizeof(product_data);
+        for (size_t i = 0; i < nfrag; i++)
+          frag[i].zacc = (PRODFLOAT)-1;
+      }
+#endif
     }
     else
 #endif

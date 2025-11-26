@@ -2566,6 +2566,9 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
     /* After back-distribution, estimate coverage of group_ID and zacc on this task */
     unsigned long long gid_pos_local = 0ULL, zacc_set_local = 0ULL;
     unsigned long long gid_pos_global = 0ULL, zacc_set_global = 0ULL;
+    /* Mismatch diagnostics: cells with zacc set but no halo ID, or vice versa */
+    unsigned long long zacc_no_group_local = 0ULL, group_no_zacc_local = 0ULL;
+    unsigned long long zacc_no_group_global = 0ULL, group_no_zacc_global = 0ULL;
     int nx = (int)MyGrids[0].GSlocal[_x_];
     int ny = (int)MyGrids[0].GSlocal[_y_];
     int nz = (int)MyGrids[0].GSlocal[_z_];
@@ -2574,20 +2577,30 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
         for (int lk = 0; lk < nz; ++lk)
         {
           unsigned int idx = COORD_TO_INDEX(li, lj, lk, MyGrids[0].GSlocal);
-          if (products[idx].group_ID > FILAMENT)
+          int in_group = (products[idx].group_ID > FILAMENT);
+          int has_zacc = (products[idx].zacc > -0.5);
+          if (in_group)
             gid_pos_local++;
-          if (products[idx].zacc > -0.5)
+          if (has_zacc)
             zacc_set_local++;
+          if (has_zacc && !in_group)
+            zacc_no_group_local++;
+          if (in_group && !has_zacc)
+            group_no_zacc_local++;
         }
     MPI_Reduce(&gid_pos_local, &gid_pos_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
     MPI_Reduce(&zacc_set_local, &zacc_set_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&zacc_no_group_local, &zacc_no_group_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&group_no_zacc_local, &group_no_zacc_global, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
     if (!ThisTask && internal.verbose_level >= VDBG)
     {
       unsigned long long total_local_size = (unsigned long long)MyGrids[0].GSglobal[_x_] * (unsigned long long)MyGrids[0].GSglobal[_y_] * (unsigned long long)MyGrids[0].GSglobal[_z_];
       double f_gid = (total_local_size > 0ULL) ? ((double)gid_pos_global / (double)total_local_size) : 0.0;
       double f_zacc = (total_local_size > 0ULL) ? ((double)zacc_set_global / (double)total_local_size) : 0.0;
-      printf("[%s] MASS_MAPS(match): products coverage after back-distribution: frac(group_ID>FILAMENT)=%.3f frac(zacc_set)=%.3f\n",
-             fdate(), f_gid, f_zacc);
+      double f_zacc_no_gid = (total_local_size > 0ULL) ? ((double)zacc_no_group_global / (double)total_local_size) : 0.0;
+      double f_gid_no_zacc = (total_local_size > 0ULL) ? ((double)group_no_zacc_global / (double)total_local_size) : 0.0;
+      printf("[%s] MASS_MAPS(match): products coverage after back-distribution: frac(group_ID>FILAMENT)=%.3f frac(zacc_set)=%.3f frac(zacc_with_no_groupID)=%.3f frac(groupID_with_no_zacc)=%.3f\n",
+             fdate(), f_gid, f_zacc, f_zacc_no_gid, f_gid_no_zacc);
     }
 #endif
   }

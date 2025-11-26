@@ -921,6 +921,67 @@ through the PLC since last time */
         frag[iz2].group_ID = groups[group_ID[iz2]].name;
 #endif
 
+#ifdef MASS_MAPS_MATCH_DIAG
+      /* Diagnostic: check consistency between zacc and group_ID at pause */
+      {
+        unsigned long long loc_tot = (unsigned long long)subbox.Nstored;
+        unsigned long long loc_zacc = 0ULL;
+        unsigned long long loc_in_halo = 0ULL;
+        unsigned long long loc_zacc_and_halo = 0ULL;
+        unsigned long long loc_zacc_no_group = 0ULL;
+        unsigned long long loc_zacc_bad_group = 0ULL;
+        unsigned long long loc_zacc_lowmass = 0ULL;
+
+        for (int iz2 = 0; iz2 < subbox.Nstored; iz2++)
+        {
+          int g = group_ID[iz2];
+          int in_halo = (g > FILAMENT && g <= ngroups && groups[g].point >= 0);
+          int has_zacc = (frag[iz2].zacc > (PRODFLOAT)-0.5);
+          int good = (in_halo && groups[g].good);
+          int massive = (good && groups[g].Mass >= params.MinHaloMass);
+
+          if (in_halo)
+            loc_in_halo++;
+          if (has_zacc)
+            loc_zacc++;
+          if (has_zacc && in_halo)
+            loc_zacc_and_halo++;
+          if (has_zacc && !in_halo)
+            loc_zacc_no_group++;
+          if (has_zacc && in_halo && !good)
+            loc_zacc_bad_group++;
+          if (has_zacc && in_halo && !massive)
+            loc_zacc_lowmass++;
+        }
+
+        unsigned long long gl_tot = 0ULL, gl_zacc = 0ULL, gl_in_halo = 0ULL;
+        unsigned long long gl_zacc_and_halo = 0ULL, gl_zacc_no_group = 0ULL;
+        unsigned long long gl_zacc_bad_group = 0ULL, gl_zacc_lowmass = 0ULL;
+
+        MPI_Reduce(&loc_tot, &gl_tot, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&loc_zacc, &gl_zacc, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&loc_in_halo, &gl_in_halo, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&loc_zacc_and_halo, &gl_zacc_and_halo, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&loc_zacc_no_group, &gl_zacc_no_group, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&loc_zacc_bad_group, &gl_zacc_bad_group, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&loc_zacc_lowmass, &gl_zacc_lowmass, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+
+        if (!ThisTask && gl_tot > 0ULL)
+        {
+          double f_in_halo = (double)gl_in_halo / (double)gl_tot;
+          double f_zacc = (double)gl_zacc / (double)gl_tot;
+          double f_zacc_and_halo = (double)gl_zacc_and_halo / (double)gl_tot;
+          double f_zacc_no_group = (double)gl_zacc_no_group / (double)gl_tot;
+          double f_zacc_bad_group = (double)gl_zacc_bad_group / (double)gl_tot;
+          double f_zacc_lowmass = (double)gl_zacc_lowmass / (double)gl_tot;
+          printf("[%s] FRAG_DIAG(pause): frac(in_halo)=%.3f frac(zacc_set)=%.3f frac(zacc&halo)=%.3f frac(zacc_no_groupID)=%.3f frac(zacc_bad_group)=%.3f frac(zacc_lowmass)=%.3f\n",
+                 fdate(),
+                 f_in_halo, f_zacc, f_zacc_and_halo,
+                 f_zacc_no_group, f_zacc_bad_group, f_zacc_lowmass);
+        }
+      }
+#endif
+
       if (!ThisTask)
         printf("[%s] Pausing fragmentation process\n", fdate());
       last_z = this_z + 1;
@@ -961,6 +1022,67 @@ through the PLC since last time */
     printf("Total number of uncollapsed particles: %Lu\n", MyGrids[0].Ntotal - all_counters[0] - all_counters[7] - all_counters[12]);
     printf("\n");
   }
+
+#ifdef MASS_MAPS_MATCH_DIAG
+  /* Final diagnostic: zacc vs group_ID consistency at end of fragmentation */
+  {
+    unsigned long long loc_tot = (unsigned long long)subbox.Nstored;
+    unsigned long long loc_zacc = 0ULL;
+    unsigned long long loc_in_halo = 0ULL;
+    unsigned long long loc_zacc_and_halo = 0ULL;
+    unsigned long long loc_zacc_no_group = 0ULL;
+    unsigned long long loc_zacc_bad_group = 0ULL;
+    unsigned long long loc_zacc_lowmass = 0ULL;
+
+    for (iz = 0; iz < subbox.Nstored; iz++)
+    {
+      int g = group_ID[iz];
+      int in_halo = (g > FILAMENT && g <= ngroups && groups[g].point >= 0);
+      int has_zacc = (frag[iz].zacc > (PRODFLOAT)-0.5);
+      int good = (in_halo && groups[g].good);
+      int massive = (good && groups[g].Mass >= params.MinHaloMass);
+
+      if (in_halo)
+        loc_in_halo++;
+      if (has_zacc)
+        loc_zacc++;
+      if (has_zacc && in_halo)
+        loc_zacc_and_halo++;
+      if (has_zacc && !in_halo)
+        loc_zacc_no_group++;
+      if (has_zacc && in_halo && !good)
+        loc_zacc_bad_group++;
+      if (has_zacc && in_halo && !massive)
+        loc_zacc_lowmass++;
+    }
+
+    unsigned long long gl_tot = 0ULL, gl_zacc = 0ULL, gl_in_halo = 0ULL;
+    unsigned long long gl_zacc_and_halo = 0ULL, gl_zacc_no_group = 0ULL;
+    unsigned long long gl_zacc_bad_group = 0ULL, gl_zacc_lowmass = 0ULL;
+
+    MPI_Reduce(&loc_tot, &gl_tot, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&loc_zacc, &gl_zacc, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&loc_in_halo, &gl_in_halo, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&loc_zacc_and_halo, &gl_zacc_and_halo, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&loc_zacc_no_group, &gl_zacc_no_group, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&loc_zacc_bad_group, &gl_zacc_bad_group, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&loc_zacc_lowmass, &gl_zacc_lowmass, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+
+    if (!ThisTask && gl_tot > 0ULL)
+    {
+      double f_in_halo = (double)gl_in_halo / (double)gl_tot;
+      double f_zacc = (double)gl_zacc / (double)gl_tot;
+      double f_zacc_and_halo = (double)gl_zacc_and_halo / (double)gl_tot;
+      double f_zacc_no_group = (double)gl_zacc_no_group / (double)gl_tot;
+      double f_zacc_bad_group = (double)gl_zacc_bad_group / (double)gl_tot;
+      double f_zacc_lowmass = (double)gl_zacc_lowmass / (double)gl_tot;
+      printf("[%s] FRAG_DIAG(final): frac(in_halo)=%.3f frac(zacc_set)=%.3f frac(zacc&halo)=%.3f frac(zacc_no_groupID)=%.3f frac(zacc_bad_group)=%.3f frac(zacc_lowmass)=%.3f\n",
+             fdate(),
+             f_in_halo, f_zacc, f_zacc_and_halo,
+             f_zacc_no_group, f_zacc_bad_group, f_zacc_lowmass);
+    }
+  }
+#endif
 
 #ifdef SNAPSHOT
   /* Saving group_ID in the frag structure for the snapshot*/

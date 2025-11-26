@@ -774,10 +774,16 @@ int distribute_back_alltoall(void)
     INDEX_TO_COORD(frag_pos[iz], ibox, jbox, kbox, subbox.Lgwbl);
 #endif
 
-    int good_particle =
+    int core_particle =
         (ibox >= subbox.safe[_x_] && ibox < subbox.Lgwbl[_x_] - subbox.safe[_x_] &&
          jbox >= subbox.safe[_y_] && jbox < subbox.Lgwbl[_y_] - subbox.safe[_y_] &&
          kbox >= subbox.safe[_z_] && kbox < subbox.Lgwbl[_z_] - subbox.safe[_z_]);
+
+#ifdef MASS_MAPS_FILTER_UNCOLLAPSED
+    int good_particle = (core_particle || frag[iz].zacc > (PRODFLOAT)-0.5);
+#else
+    int good_particle = core_particle;
+#endif
 
     /* Global box frame, as in send_data_back */
     ibox = (ibox + subbox.stabl[_x_] + MyGrids[0].GSglobal[_x_]) % MyGrids[0].GSglobal[_x_];
@@ -896,10 +902,16 @@ int distribute_back_alltoall(void)
     INDEX_TO_COORD(frag_pos[iz], ibox, jbox, kbox, subbox.Lgwbl);
 #endif
 
-    int good_particle =
+    int core_particle =
         (ibox >= subbox.safe[_x_] && ibox < subbox.Lgwbl[_x_] - subbox.safe[_x_] &&
          jbox >= subbox.safe[_y_] && jbox < subbox.Lgwbl[_y_] - subbox.safe[_y_] &&
          kbox >= subbox.safe[_z_] && kbox < subbox.Lgwbl[_z_] - subbox.safe[_z_]);
+
+#ifdef MASS_MAPS_FILTER_UNCOLLAPSED
+    int good_particle = (core_particle || frag[iz].zacc > (PRODFLOAT)-0.5);
+#else
+    int good_particle = core_particle;
+#endif
 
     ibox = (ibox + subbox.stabl[_x_] + MyGrids[0].GSglobal[_x_]) % MyGrids[0].GSglobal[_x_];
     jbox = (jbox + subbox.stabl[_y_] + MyGrids[0].GSglobal[_y_]) % MyGrids[0].GSglobal[_y_];
@@ -1230,9 +1242,21 @@ int keep_data_back(int *fft_box)
 #endif
 
     /* this is still in the subbox frame */
-    good_particle = (ibox >= subbox.safe[_x_] && ibox < subbox.Lgwbl[_x_] - subbox.safe[_x_] &&
-                     jbox >= subbox.safe[_y_] && jbox < subbox.Lgwbl[_y_] - subbox.safe[_y_] &&
-                     kbox >= subbox.safe[_z_] && kbox < subbox.Lgwbl[_z_] - subbox.safe[_z_]);
+    unsigned int core_particle = (ibox >= subbox.safe[_x_] && ibox < subbox.Lgwbl[_x_] - subbox.safe[_x_] &&
+                                  jbox >= subbox.safe[_y_] && jbox < subbox.Lgwbl[_y_] - subbox.safe[_y_] &&
+                                  kbox >= subbox.safe[_z_] && kbox < subbox.Lgwbl[_z_] - subbox.safe[_z_]);
+
+#ifdef MASS_MAPS_FILTER_UNCOLLAPSED
+    /* For MASS_MAPS_FILTER_UNCOLLAPSED we also need collapse times for halo
+       particles that lie in the boundary layer; otherwise only the subset
+       inside the core region would be filtered out of the mass maps while
+       PLC catalogs use full halo masses, causing small mass mismatches when
+       BoundaryLayerFactor > 0.  Treat any fragment with a valid zacc as
+       eligible, even if outside the core. */
+    good_particle = (core_particle || frag[iz].zacc > (PRODFLOAT)-0.5);
+#else
+    good_particle = core_particle;
+#endif
 
     /* global box frame */
     ibox = (ibox + subbox.stabl[_x_] + MyGrids[0].GSglobal[_x_]) % MyGrids[0].GSglobal[_x_];
@@ -1282,9 +1306,15 @@ int send_data_back(int target)
 #else
     INDEX_TO_COORD(frag_pos[iz], ibox, jbox, kbox, subbox.Lgwbl);
 #endif
-    good_particle = (ibox >= subbox.safe[_x_] && ibox < subbox.Lgwbl[_x_] - subbox.safe[_x_] &&
-                     jbox >= subbox.safe[_y_] && jbox < subbox.Lgwbl[_y_] - subbox.safe[_y_] &&
-                     kbox >= subbox.safe[_z_] && kbox < subbox.Lgwbl[_z_] - subbox.safe[_z_]);
+    unsigned int core_particle = (ibox >= subbox.safe[_x_] && ibox < subbox.Lgwbl[_x_] - subbox.safe[_x_] &&
+                                  jbox >= subbox.safe[_y_] && jbox < subbox.Lgwbl[_y_] - subbox.safe[_y_] &&
+                                  kbox >= subbox.safe[_z_] && kbox < subbox.Lgwbl[_z_] - subbox.safe[_z_]);
+
+#ifdef MASS_MAPS_FILTER_UNCOLLAPSED
+    good_particle = (core_particle || frag[iz].zacc > (PRODFLOAT)-0.5);
+#else
+    good_particle = core_particle;
+#endif
 
     /* global box frame */
     ibox = (ibox + subbox.stabl[_x_] + MyGrids[0].GSglobal[_x_]) % MyGrids[0].GSglobal[_x_];
