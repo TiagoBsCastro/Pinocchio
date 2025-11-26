@@ -64,8 +64,8 @@ OPTIONS += -DTHREE_LPT
 OPTIONS += -DPLC
 OPTIONS += -DMASS_MAPS
 OPTIONS += -DHAVE_CFITSIO
-OPTIONS += -DMASS_MAPS_FILTER_UNCOLLAPSED  # Z_PLC > Z_ACC (requires SNAPSHOT)
-# OPTIONS += -DDISP_HISTOGRAM               # Enable only when you need displacement QA
+#OPTIONS += -DMASS_MAPS_FILTER_UNCOLLAPSED  # Z_PLC > Z_ACC (requires SNAPSHOT)
+#OPTIONS += -DDISP_HISTOGRAM               # Enable only when you need displacement QA
 OPTIONS += -DMASS_MAPS_THREAD_ACCUM
 
 # Mass-maps diagnostics (compile-time)

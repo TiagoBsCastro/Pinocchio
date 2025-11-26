@@ -645,5 +645,15 @@ int reallocate_memory_for_fragmentation()
 
   memset((char *)frag, 0, count_memory - start_memory);
 
+#ifdef SNAPSHOT
+  /* Initialize frag[].zacc to sentinel -1 to match products[] semantics.
+     Other fields are correctly zero-initialized by the memset above. */
+  {
+    size_t nfrag = memory.frag_prods / sizeof(product_data);
+    for (size_t i = 0; i < nfrag; i++)
+      frag[i].zacc = (PRODFLOAT)-1;
+  }
+#endif
+
   return 0;
 }
