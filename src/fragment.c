@@ -454,6 +454,16 @@ int fragment()
         if (build_groups(Npeaks, ScaleDep.z[mysegment], (mysegment == 0)))
           return 1;
 
+#if defined(SNAPSHOT) && defined(MASS_MAPS)
+        /* Ensure frag[].group_ID reflects the current halo membership
+           (group_ID[]) before mass-map processing and back-distribution.
+           This keeps products[].group_ID consistent with groups built
+           at this segment, so diagnostics comparing zacc and group_ID
+           are meaningful. */
+        for (int iz2 = 0; iz2 < subbox.Nstored; iz2++)
+          frag[iz2].group_ID = group_ID[iz2];
+#endif
+
 #ifdef MASS_MAPS
         /* Orchestrate mass map processing AFTER groups are built so halo membership is known.
            First segment (mysegment==0) will early-return inside the function. */

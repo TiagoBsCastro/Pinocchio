@@ -969,8 +969,29 @@ int distribute_back_alltoall(void)
 
   for (int i = 0; i < total_recv; i++)
   {
-    products[recvbuf[i].pos].zacc = recvbuf[i].zacc;
-    products[recvbuf[i].pos].group_ID = recvbuf[i].group_ID;
+    unsigned int pos = recvbuf[i].pos;
+
+    /* Existing local state (may have been filled by keep_data_back) */
+    PRODFLOAT local_zacc = products[pos].zacc;
+    int local_gid = products[pos].group_ID;
+
+    /* Incoming state from another task */
+    PRODFLOAT incoming_zacc = recvbuf[i].zacc;
+    int incoming_gid = recvbuf[i].group_ID;
+
+    /* ZACC:
+       - Do not allow an incoming "unset" value (<= -0.5) to erase a local
+         collapse tag (> -0.5).
+       - Only fill a collapse time if the local value is still unset. */
+    if (local_zacc <= (PRODFLOAT)-0.5 && incoming_zacc > (PRODFLOAT)-0.5)
+      products[pos].zacc = incoming_zacc;
+
+    /* group_ID:
+       - Do not demote a local halo membership (>FILAMENT) to FILAMENT/none
+         (<=FILAMENT) based on a ghost view.
+       - Otherwise accept the incoming value. */
+    if (!(local_gid > FILAMENT && incoming_gid <= FILAMENT))
+      products[pos].group_ID = incoming_gid;
   }
 
   /* ------------------------------------------------------------------
@@ -1382,8 +1403,21 @@ int recv_data_back(int *mybox, int sender)
       MPI_Recv(back_buffer, nsent * sizeof(back_data), MPI_BYTE, sender, 0, MPI_COMM_WORLD, &status);
     for (int iz = 0; iz < nsent; iz++)
     {
-      products[back_buffer[iz].pos].zacc = back_buffer[iz].zacc;
-      products[back_buffer[iz].pos].group_ID = back_buffer[iz].group_ID;
+      unsigned int pos = back_buffer[iz].pos;
+
+      PRODFLOAT local_zacc = products[pos].zacc;
+      int local_gid = products[pos].group_ID;
+
+      PRODFLOAT incoming_zacc = back_buffer[iz].zacc;
+      int incoming_gid = back_buffer[iz].group_ID;
+
+      /* ZACC: preserve any existing collapse tag; only fill if unset. */
+      if (local_zacc <= (PRODFLOAT)-0.5 && incoming_zacc > (PRODFLOAT)-0.5)
+        products[pos].zacc = incoming_zacc;
+
+      /* group_ID: avoid demoting an existing halo membership to FILAMENT/none. */
+      if (!(local_gid > FILAMENT && incoming_gid <= FILAMENT))
+        products[pos].group_ID = incoming_gid;
     }
     received += nsent;
   } while (nsent);

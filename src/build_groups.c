@@ -914,11 +914,13 @@ through the PLC since last time */
     if (this_z != nstep - 1 && frag[iz].Fmax < zstop + 1.0)
     {
 #ifdef SNAPSHOT
-      /* Keep frag[].group_ID in sync with current group_ID before pausing */
+      /* Keep frag[].group_ID in sync with current group_ID before pausing.
+         We store the internal group index (group_ID[iz]) here so downstream
+         users (e.g. mass maps) can reliably test membership via >FILAMENT. */
       groups[0].name = 0;
       groups[FILAMENT].name = FILAMENT;
       for (int iz2 = 0; iz2 < subbox.Nstored; iz2++)
-        frag[iz2].group_ID = groups[group_ID[iz2]].name;
+        frag[iz2].group_ID = group_ID[iz2];
 #endif
 
 #ifdef MASS_MAPS_MATCH_DIAG
@@ -1085,11 +1087,13 @@ through the PLC since last time */
 #endif
 
 #ifdef SNAPSHOT
-  /* Saving group_ID in the frag structure for the snapshot*/
+  /* Saving group_ID in the frag structure for the snapshot.
+     As above, we store the internal group index so that products[].group_ID
+     represents halo membership consistently (group_ID>FILAMENT). */
   groups[0].name = 0;
   groups[FILAMENT].name = FILAMENT;
   for (iz = 0; iz < subbox.Nstored; iz++)
-    frag[iz].group_ID = groups[group_ID[iz]].name;
+    frag[iz].group_ID = group_ID[iz];
 #endif
 
 #ifdef PLC
@@ -1261,6 +1265,20 @@ void merge_groups(int grp1, int grp2, PRODFLOAT time)
       }
       frag[i1].zacc = time - 1.0;
     }
+  }
+
+  /* If the surviving halo is bad but the secondary progenitor was good,
+     clear any existing zacc for particles that belonged to that good
+     progenitor so their mass is not removed from the mass maps. */
+  if (!groups[grp1].good && groups[grp2].good && groups[grp2].point >= 0)
+  {
+    i1 = groups[grp2].point;
+    while (linking_list[i1] != groups[grp2].point)
+    {
+      frag[i1].zacc = (PRODFLOAT)-1;
+      i1 = linking_list[i1];
+    }
+    frag[i1].zacc = (PRODFLOAT)-1;
   }
 #endif
 
