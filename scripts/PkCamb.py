@@ -2,6 +2,8 @@
 """
 Compute P_cb(k,z) with CAMB and (optionally) also total matter P(k) and transfer functions.
 
+This version also accepts CPL dark-energy parameters w0 and wa and uses CAMB's PPF dark-energy treatment to remain well behaved across w=-1 crossing.
+
 IMPORTANT CHANGE: Background tables (H(z) and optional Omega_cb(z)) are now written on a FIXED scale-factor grid
 independent of the user-chosen P(k) redshift sampling. This avoids coupling background resolution to the (often
 coarser) spectrum output list.
@@ -83,6 +85,10 @@ def main():
     p.add_argument("--mnu", type=float, default=0.06, help="Sum of neutrino masses in eV (default: 0.06).")
     p.add_argument("--Neff", type=float, default=3.046, help="Effective N_eff for massless species (default: 3.046).")
     p.add_argument("--tau", type=float, default=0.054, help="Optical depth tau (default: 0.054).")
+    p.add_argument("--w0", "--wo", dest="w0", type=float, default=-1.0,
+                   help="Dark-energy CPL parameter w0 (alias: --wo). Default: -1.0")
+    p.add_argument("--wa", type=float, default=0.0,
+                   help="Dark-energy CPL parameter wa. Default: 0.0")
     # Linear / non-linear choice for P(k)
     p.add_argument("--nonlinear", action="store_true",
                    help="If set, include non-linear corrections for matter P(k). Linear by default.")
@@ -121,6 +127,7 @@ def main():
     pars = camb.CAMBparams()
     pars.set_cosmology(H0=args.H0, ombh2=args.Ob0 * h**2, omch2=args.Ocdm0 * h**2,
                        mnu=args.mnu, nnu=args.Neff, tau=args.tau)
+    pars.set_dark_energy(w=args.w0, wa=args.wa, dark_energy_model="ppf")
     pars.InitPower.set_params(As=args.As, ns=args.ns)
     pars.NonLinear = model.NonLinear_pk if args.nonlinear else model.NonLinear_none
 
@@ -219,7 +226,7 @@ def main():
         "Wrote "
         f"{Nz} P(k) files (prefix '{args.pk_prefix}'){extras}, redshifts.dat, "
         f"background H(z) grid ({args.hubble_file}) and {'omega_cb.dat, ' if args.write_optional_files else ''}"
-        f"using fixed a-grid (200 points 0.0001->1.51356). Output dir: {os.path.abspath(args.outdir)} (units: {args.units})."
+        f"using fixed a-grid (200 points 0.0001->1.51356). Output dir: {os.path.abspath(args.outdir)} (units: {args.units}, w0={args.w0}, wa={args.wa}, DE model=ppf)."
     )
 
 if __name__ == "__main__":
