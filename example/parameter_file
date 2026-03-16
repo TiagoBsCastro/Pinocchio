@@ -3,7 +3,7 @@
 # run properties
 RunFlag                example      % name of the run
 OutputList             outputs      % output list 
-BoxSize                128          % physical size of the box in Mpc
+BoxSize                256          % physical size of the box in Mpc
 BoxInH100                           % specify that the box is in Mpc/h
 GridSize               128          % number of grid points per side
 RandomSeed             250693       % random seed for initial conditions
