@@ -48,6 +48,7 @@ int get_distmap_bit(unsigned int *, unsigned int);
 void set_distmap_bit(unsigned int *, unsigned int, int);
 void build_distmap(unsigned int *, int *);
 void update_distmap(unsigned int *, int *);
+unsigned int distmap_length(unsigned int);
 #endif
 
 #ifdef DEBUG
@@ -327,7 +328,7 @@ int send_data(int *mybox, int target)
 
 #ifndef CLASSIC_FRAGMENTATION
     /* receive the map of needed particles */
-    mapl = size / 8 + 1;
+    mapl = distmap_length(size);
     map = (unsigned int *)calloc(mapl, sizeof(unsigned int));
 
     /* the receiver has built its map and is sending it */
@@ -446,7 +447,7 @@ int recv_data(int *mybox, int sender)
 
 #ifndef CLASSIC_FRAGMENTATION
     /* send the map of needed particles */
-    mapl = size / 8 + 1;
+    mapl = distmap_length(size);
     map = (unsigned int *)calloc(mapl, sizeof(unsigned int));
 
     /* constructs the map for the intersection and send it to the sender */
@@ -563,7 +564,7 @@ int keep_data(int *fft_box, int *sub_box)
 #else
 
     /* map of needed particles */
-    mapl = size / 8 + 1;
+    mapl = distmap_length(size);
     map = (unsigned int *)calloc(mapl, sizeof(unsigned int));
     build_distmap(map, interbox + off);
     update_distmap(map, interbox + off);
@@ -629,6 +630,11 @@ unsigned int subbox_space_index(unsigned int pos, int *box)
 }
 
 #ifndef CLASSIC_FRAGMENTATION
+unsigned int distmap_length(unsigned int size)
+{
+  return size / UINTLEN + (size % UINTLEN != 0);
+}
+
 int get_distmap_bit(unsigned int *map, unsigned int pos)
 {
   /* this operates on the map allocated for the distribution */

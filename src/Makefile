@@ -100,6 +100,7 @@ OPTIONS += -DSNAPSHOT
 # -DREAD_HUBBLE_TABLE          Read H(z) table for precise distances.
 # -DMASS_MAPS_MATCH_DIAG       Extra cross-matching diagnostics (debug).
 OPTIONS += -DMASS_MAPS_MATCH_DIAG
+OPTIONS += -DREAD_PK_TABLE
 
 # f(R) gravity:
 # -DMOD_GRAV_FR                Enable modified gravity model (f(R)).
