@@ -1,0 +1,13 @@
+<map id="system_of_ODEs_small" name="system_of_ODEs_small">
+<area shape="rect" id="Node000001" title=" " alt="" coords="5,31,180,56"/>
+<area shape="rect" id="Node000002" href="$cosmo_8c.html#a445fb83b1fea3dc80e9d163d14e7591f" title=" " alt="" coords="228,31,327,56"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="180,41,214,41,214,46,180,46"/>
+<area shape="rect" id="Node000003" href="$cosmo_8c.html#ac7fbe724feedc1cb5b0afe20117b5f8d" title=" " alt="" coords="375,5,439,31"/>
+<area shape="poly" id="edge2_Node000002_Node000003" title=" " alt="" coords="326,31,361,24,362,29,327,36"/>
+<area shape="rect" id="Node000004" href="$cosmo_8c.html#a23ab46a1787abb61a8685d7c8f06cdd4" title=" " alt="" coords="387,55,426,80"/>
+<area shape="poly" id="edge3_Node000002_Node000004" title=" " alt="" coords="327,50,374,59,373,64,326,55"/>
+<area shape="rect" id="Node000005" href="$cosmo_8c.html#a911e9ce363c4662ce531c65885519f7a" title=" " alt="" coords="487,55,555,80"/>
+<area shape="poly" id="edge4_Node000004_Node000005" title=" " alt="" coords="426,65,473,65,473,70,426,70"/>
+<area shape="rect" id="Node000006" href="$cosmo_8c.html#a6341f5394ed17a00dc77c5519b292ae3" title=" " alt="" coords="603,55,727,80"/>
+<area shape="poly" id="edge5_Node000005_Node000006" title=" " alt="" coords="555,65,589,65,589,70,555,70"/>
+</map>

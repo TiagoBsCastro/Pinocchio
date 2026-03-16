@@ -1,0 +1,23 @@
+var searchData=
+[
+  ['r_0',['R',['../structpos__data.html#a8e2d019a9f4fac0cc28bdfe1993b590c',1,'pos_data']]],
+  ['radius_1',['Radius',['../structsmoothing__data.html#a7aea35ae8c0247731573302237db8146',1,'smoothing_data']]],
+  ['random_5fgenerator_2',['random_generator',['../variables_8c.html#a4ec93729b85eb5da23dd6ffb23c3702b',1,'random_generator:&#160;variables.c'],['../pinocchio_8h.html#a4ec93729b85eb5da23dd6ffb23c3702b',1,'random_generator:&#160;variables.c']]],
+  ['randomseed_3',['RandomSeed',['../structparam__data.html#a795b1d60d1a4232a0b7c7ff14d3af651',1,'param_data']]],
+  ['readproductsfromdumps_4',['ReadProductsFromDumps',['../structparam__data.html#ae77811da90de38b3deea2cc36a55c166',1,'param_data']]],
+  ['red_5',['red',['../structplc__write__data.html#a4704aa393ad780551646cd82896c315e',1,'plc_write_data']]],
+  ['redshift_6',['redshift',['../structScaleDep__data.html#a2d2593052bac427615eb70e14dc33836',1,'ScaleDep_data::redshift'],['../structSnapshotHeader__data.html#a31fde21da8e6577897aa1b8655c323e3',1,'SnapshotHeader_data::RedShift'],['../write__snapshot_8c.html#a4212f3f730bfc529609946e793bc4e62',1,'redshift:&#160;write_snapshot.c']]],
+  ['replicate_7',['replicate',['../build__groups_8c.html#a5cf3d88f0de1511495a4dff795a648e8',1,'build_groups.c']]],
+  ['replication_5forigin_8',['replication_origin',['../namespacePlcGeometryplot__3D.html#a0993c831316e88b5d825e0144021e978',1,'PlcGeometryplot_3D']]],
+  ['repls_9',['repls',['../structplc__data.html#aa82bbea9272efd0701ce28fe1aec2fd5',1,'plc_data']]],
+  ['reverse_5fplan_10',['reverse_plan',['../structgrid__data.html#a348f18a5f66759c6d3be00481deeaca3',1,'grid_data']]],
+  ['rmax_11',['rmax',['../structproduct__data.html#aeb8186931e611cec30f01ec9abe3ffd0',1,'product_data::Rmax'],['../namespacePlcGeometryplot__3D.html#a0fc835fbcc4b7561b383beb624aecdfd',1,'PlcGeometryplot_3D.rmax']]],
+  ['rmin_12',['rmin',['../namespacePlcGeometryplot__3D.html#a9c25d047dafb5be5d7e3b03fb2ee7cde',1,'PlcGeometryplot_3D']]],
+  ['rsmooth_13',['rsmooth',['../variables_8c.html#adbc8a462766b7e6094197100d2f91ef9',1,'Rsmooth:&#160;variables.c'],['../pinocchio_8h.html#adbc8a462766b7e6094197100d2f91ef9',1,'Rsmooth:&#160;variables.c']]],
+  ['rstart_14',['rstart',['../namespacePlcGeometryplot__3D.html#abe5b037a3574bab5d3b8d7db85c7021a',1,'PlcGeometryplot_3D']]],
+  ['rstop_15',['rstop',['../namespacePlcGeometryplot__3D.html#a3c31324f3b17ba92f34cc9cd9f9e65e4',1,'PlcGeometryplot_3D']]],
+  ['run_5fflag_16',['RUN_FLAG',['../namespaceHMF__validation.html#aba00a25be366da87d0e62d993cbcfa3d',1,'HMF_validation']]],
+  ['runflag_17',['runflag',['../structparam__data.html#a010ce0fe3f430dfd199d5ff61291a4e4',1,'param_data::RunFlag'],['../namespacePinocchio2fits.html#ab7d6dfd114447d17ca056978a7aecce4',1,'Pinocchio2fits.runflag'],['../namespaceValidateFits.html#a531e699f1df51609b42737e00ab71863',1,'ValidateFits.runflag']]],
+  ['runname_18',['runname',['../namespacePlotExample.html#ad7cef5fbcb5d5992077a8a9dd337fcd8',1,'PlotExample']]],
+  ['rvector_5ffft_19',['rvector_fft',['../pinocchio_8h.html#a1ae151a3799b592d4d0ebeb2f107443d',1,'rvector_fft:&#160;variables.c'],['../variables_8c.html#a1ae151a3799b592d4d0ebeb2f107443d',1,'rvector_fft:&#160;variables.c']]]
+];

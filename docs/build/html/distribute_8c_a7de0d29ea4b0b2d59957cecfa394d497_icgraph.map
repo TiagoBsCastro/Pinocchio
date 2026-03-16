@@ -1,0 +1,11 @@
+<map id="recv_data" name="recv_data">
+<area shape="rect" id="Node000001" title=" " alt="" coords="545,5,632,31"/>
+<area shape="rect" id="Node000002" href="$distribute_8c.html#af6270be45d7dae978d369017a83b25cc" title=" " alt="" coords="413,5,497,31"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="532,21,498,21,498,15,532,15"/>
+<area shape="rect" id="Node000003" href="$fragment_8c.html#ac2bb250921932f90f7b0939d1181b66d" title=" " alt="" coords="283,5,365,31"/>
+<area shape="poly" id="edge2_Node000002_Node000003" title=" " alt="" coords="400,21,365,21,365,15,400,15"/>
+<area shape="rect" id="Node000004" href="$fragment_8c.html#ae3aa75d17cbc170e60f4f48c4a2ffdf5" title=" " alt="" coords="108,5,235,31"/>
+<area shape="poly" id="edge3_Node000003_Node000004" title=" " alt="" coords="269,21,235,21,235,15,269,15"/>
+<area shape="rect" id="Node000005" href="$pinocchio_8c.html#a647f21a28344e1d9c643f4115516d7c9" title=" " alt="" coords="5,5,60,31"/>
+<area shape="poly" id="edge4_Node000004_Node000005" title=" " alt="" coords="95,21,60,21,60,15,95,15"/>
+</map>

@@ -1,0 +1,7 @@
+<map id="def_splines.h" name="def_splines.h">
+<area shape="rect" id="Node000001" title=" " alt="" coords="44,5,152,31"/>
+<area shape="rect" id="Node000002" href="$cosmo_8c.html" title=" " alt="" coords="5,79,81,104"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="83,43,54,80,50,77,79,40"/>
+<area shape="rect" id="Node000003" href="$pinocchio_8c.html" title=" " alt="" coords="105,79,200,104"/>
+<area shape="poly" id="edge2_Node000001_Node000003" title=" " alt="" coords="117,40,146,77,142,80,113,43"/>
+</map>

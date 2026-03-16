@@ -1,0 +1,26 @@
+var structcputime__data =
+[
+    [ "coll", "structcputime__data.html#a819fbd3864def474f883e7ecee53ad3e", null ],
+    [ "dens", "structcputime__data.html#a28c0d8ef77262f21d7d963c5a6f7dae0", null ],
+    [ "deriv", "structcputime__data.html#a3cdf9e716708afa5f9b1de878f48f914", null ],
+    [ "distr", "structcputime__data.html#a1d20dacb437f325ce30a7a0ce87ac934", null ],
+    [ "ell", "structcputime__data.html#ada8d8527b1984654d01858cd5db16413", null ],
+    [ "fft", "structcputime__data.html#aebd836d319af28e745ee390f91d6d857", null ],
+    [ "fft_initialization", "structcputime__data.html#ad10c8c360a8e0ddd07a0f3a2e54f70a9", null ],
+    [ "fmax", "structcputime__data.html#abf2615a59f85ab4fda0b80d1bb42f0af", null ],
+    [ "frag", "structcputime__data.html#ac31625c560800d02b29b1cd8545a0de4", null ],
+    [ "group", "structcputime__data.html#a44243414040b005b869d5e65f5ff75d0", null ],
+    [ "init", "structcputime__data.html#a53f04a98d2e621a1c54540921fb08637", null ],
+    [ "invcoll", "structcputime__data.html#af87ea37b97f3dab0ae9e3e5f1e84ca1f", null ],
+    [ "io", "structcputime__data.html#a763dbb400ce5df94e1f1aceff52fc247", null ],
+    [ "lpt", "structcputime__data.html#a25d526dc599d7c54dee0501ff4225685", null ],
+    [ "mem_transf", "structcputime__data.html#a3923d03e5ee16cb816ed387cab35e0ab", null ],
+    [ "memory_allocation", "structcputime__data.html#afb8cf746046dc80a5b7c19b1f863c628", null ],
+    [ "partial", "structcputime__data.html#a70f71617b2f3b90c53603d68b6416560", null ],
+    [ "plc", "structcputime__data.html#a443bb359b26d96af3494714032271da3", null ],
+    [ "set_plc", "structcputime__data.html#afd1015a1622264bfa24510a443c87a8f", null ],
+    [ "set_subboxes", "structcputime__data.html#a501d10bbfeab2ce534366a390e447dab", null ],
+    [ "sort", "structcputime__data.html#a24a1d4ff187d99f92fbb31d48eb64f68", null ],
+    [ "total", "structcputime__data.html#a629d272bb170c6d3b63c4932017ebd65", null ],
+    [ "vel", "structcputime__data.html#a373cb010326600f5683f2e03c81766d5", null ]
+];

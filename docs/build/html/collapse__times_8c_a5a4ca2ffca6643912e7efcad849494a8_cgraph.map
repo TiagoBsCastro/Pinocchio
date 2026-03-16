@@ -1,0 +1,23 @@
+<map id="ell_sng" name="ell_sng">
+<area shape="rect" id="Node000001" title=" " alt="" coords="5,55,73,80"/>
+<area shape="rect" id="Node000002" href="$cosmo_8c.html#a9fbcf5b69c272e801cf320cf814b23c4" title=" " alt="" coords="121,5,233,31"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="73,53,127,33,129,38,74,58"/>
+<area shape="rect" id="Node000005" href="$cosmo_8c.html#a90c59eea1bc597d21ec511441cc3c925" title=" " alt="" coords="157,55,198,80"/>
+<area shape="poly" id="edge4_Node000001_Node000005" title=" " alt="" coords="73,65,143,65,143,70,73,70"/>
+<area shape="rect" id="Node000006" href="$collapse__times_8c.html#a16072c1c54a0bc722718884b29bd0409" title=" " alt="" coords="127,104,227,129"/>
+<area shape="poly" id="edge5_Node000001_Node000006" title=" " alt="" coords="74,77,129,97,127,102,73,82"/>
+<area shape="rect" id="Node000003" href="$cosmo_8c.html#a8847e5b8ea1f9c458c8bf9e5f36837a9" title=" " alt="" coords="451,5,591,31"/>
+<area shape="poly" id="edge2_Node000002_Node000003" title=" " alt="" coords="233,15,437,15,437,21,233,21"/>
+<area shape="rect" id="Node000004" href="$cosmo_8c.html#a6341f5394ed17a00dc77c5519b292ae3" title=" " alt="" coords="755,31,879,56"/>
+<area shape="poly" id="edge3_Node000003_Node000004" title=" " alt="" coords="591,21,741,34,740,40,591,27"/>
+<area shape="rect" id="Node000007" href="$cosmo_8c.html#abe72f217a5a4d0aadeba3d2c733128fb" title=" " alt="" coords="281,56,403,81"/>
+<area shape="poly" id="edge6_Node000006_Node000007" title=" " alt="" coords="221,101,284,83,285,88,222,106"/>
+<area shape="rect" id="Node000010" href="$cosmo_8c.html#a4cb3653cf2125654f8b70d14b2a08dc8" title=" " alt="" coords="286,105,398,131"/>
+<area shape="poly" id="edge10_Node000006_Node000010" title=" " alt="" coords="228,114,272,115,272,120,228,120"/>
+<area shape="rect" id="Node000008" href="$cosmo_8c.html#a23ab46a1787abb61a8685d7c8f06cdd4" title=" " alt="" coords="501,56,540,81"/>
+<area shape="poly" id="edge7_Node000007_Node000008" title=" " alt="" coords="403,66,488,66,488,71,403,71"/>
+<area shape="rect" id="Node000009" href="$cosmo_8c.html#a911e9ce363c4662ce531c65885519f7a" title=" " alt="" coords="639,56,707,81"/>
+<area shape="poly" id="edge8_Node000008_Node000009" title=" " alt="" coords="540,66,625,66,625,71,540,71"/>
+<area shape="poly" id="edge9_Node000009_Node000004" title=" " alt="" coords="706,60,741,54,742,59,707,65"/>
+<area shape="poly" id="edge11_Node000010_Node000008" title=" " alt="" coords="388,103,487,75,489,80,389,108"/>
+</map>

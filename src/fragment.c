@@ -223,9 +223,11 @@ int fragment()
 
       if (!ThisTask)
       {
-        printf("[%s] Requesting %Ld particles from the boundary layer\n", fdate(), nadd_all[0]);
+        printf("[%s] Requesting %llu particles from the boundary layer\n",
+               fdate(), (unsigned long long)nadd_all[0]);
         if (nadd_all[1])
-          printf("WARNING: %Ld requested particles lie beyond the boundary layer, some halos may be inaccurate\n", nadd_all[1]);
+          printf("WARNING: %llu requested particles lie beyond the boundary layer, some halos may be inaccurate\n",
+                 (unsigned long long)nadd_all[1]);
       }
     }
 
@@ -386,6 +388,17 @@ int fragment()
       cputime.group += tmp;
       if (!ThisTask)
         printf("[%s] Quick fragmentation done, cputime = %14.6f\n", fdate(), tmp);
+
+#ifdef SNAPSHOT
+      /* Reset any zacc values written during quick_build_groups.
+         The full fragmentation run below will recompute halo
+         memberships and accretion times consistently. */
+      {
+        size_t nfrag = memory.frag_prods / sizeof(product_data);
+        for (size_t i = 0; i < nfrag; i++)
+          frag[i].zacc = (PRODFLOAT)-1;
+      }
+#endif
     }
     else
 #endif
@@ -406,8 +419,15 @@ int fragment()
           if (shift_all_displacements())
             return 1;
 
+#if defined(SCALE_DEPENDENT) || defined(READ_PK_TABLE) || defined(MOD_GRAV_FR)
+          /* Scale-dependent growth: must recompute derivatives via FFTs */
           if (compute_displacements(0, 0, ScaleDep.z[mysegment]))
             return 1;
+#else
+          /* Scale-independent growth: reuse base derivatives, rescale fields */
+          if (scale_products_displacements(ScaleDep.z[mysegment - 1], ScaleDep.z[mysegment]))
+            return 1;
+#endif
 
           tmp = MPI_Wtime();
           if (!ThisTask)
@@ -433,6 +453,22 @@ int fragment()
 
         if (build_groups(Npeaks, ScaleDep.z[mysegment], (mysegment == 0)))
           return 1;
+
+#if defined(SNAPSHOT) && defined(MASS_MAPS)
+        /* Ensure frag[].group_ID reflects the current halo membership
+           (group_ID[]) before mass-map processing and back-distribution.
+           This keeps products[].group_ID consistent with groups built
+           at this segment, so diagnostics comparing zacc and group_ID
+           are meaningful. */
+        for (int iz2 = 0; iz2 < subbox.Nstored; iz2++)
+          frag[iz2].group_ID = group_ID[iz2];
+#endif
+
+#ifdef MASS_MAPS
+        /* Orchestrate mass map processing AFTER groups are built so halo membership is known.
+           First segment (mysegment==0) will early-return inside the function. */
+        mass_maps_process_segment(mysegment, ScaleDep.z[mysegment], (mysegment == 0));
+#endif
 
         tmp = MPI_Wtime() - tmp;
         if (!ThisTask)

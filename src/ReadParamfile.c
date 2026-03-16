@@ -58,6 +58,9 @@ int read_parameter_file()
   {
 
     nt = 0;
+    int idx_NumMassPlanes = -1; /* track presence to inform user if missing */
+    int idx_MassMapNSIDE = -1;
+    int idx_MassMapMasterMaxGB = -1;
 
     /* list of requested parameters */
     strcpy(tag[nt], "RunFlag");
@@ -266,6 +269,13 @@ int read_parameter_file()
     addr[nt] = &(internal.verbose_level);
     id[nt++] = INT_SKIP_DEF;
 
+#ifdef MASS_MAPS
+  /* Mass maps parameters */
+  strcpy(tag[nt], "MassMapNSIDE");
+  addr[nt] = &params.MassMapNSIDE;
+  id[nt++] = INT_SKIP_DEF; /* required if MASS_MAPS active */
+#endif
+
     strcpy(tag[nt], "LargePlane");
     addr[nt] = &(internal.large_plane);
     id[nt++] = LOGICAL;
@@ -404,7 +414,7 @@ int read_parameter_file()
       return 2;
     }
 
-    /* Checks that all parameters are found */
+  /* Checks that all parameters are found */
     for (i = 0; i < nt; i++)
     {
       if (*tag[i])
@@ -420,7 +430,7 @@ int read_parameter_file()
       }
     }
 
-    /* Now opens and reads the list of wanted outputs */
+  /* Now opens and reads the list of wanted outputs */
     outputs.n = 0;
     if ((fd = fopen(params.OutputList, "r")))
       while (!feof(fd))
@@ -454,6 +464,20 @@ int read_parameter_file()
     }
 
     params.GridSize[1] = params.GridSize[2] = params.GridSize[0];
+
+#ifdef MASS_MAPS
+    /* Validate MassMapNSIDE */
+    if (params.MassMapNSIDE <= 0) {
+      printf("ERROR on task 0: MassMapNSIDE must be > 0 when MASS_MAPS is compiled.\n");
+      fflush(stdout);
+      return 1;
+    }
+    if ( (params.MassMapNSIDE & (params.MassMapNSIDE - 1)) != 0) {
+      printf("ERROR on task 0: MassMapNSIDE=%d is not a power of two.\n", params.MassMapNSIDE);
+      fflush(stdout);
+      return 1;
+    }
+#endif
   }
 
   /* processor 0 broadcasts the parameters to all other processors */

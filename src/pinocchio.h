@@ -108,52 +108,6 @@
 
 #define SWAP_INT(A, B) (A) ^= (B), (B) ^= (A), (A) ^= (B);
 
-/*
-  Global diagnostic wrapper for MPI_Reduce
-  - Logs rank and file:line for each Reduce
-  - Adds barriers before/after to catch divergence
-  - Prints MPI error string and aborts on failure
-  Enable by default; define DISABLE_MPI_REDUCE_DIAG to turn off.
-*/
-#define DISABLE_MPI_REDUCE_DIAG
-#ifndef DISABLE_MPI_REDUCE_DIAG
-static inline int pin_MPI_Reduce_diag(const void *sendbuf, void *recvbuf, int count,
-                                      MPI_Datatype datatype, MPI_Op op, int root,
-                                      MPI_Comm comm, const char *file, int line)
-{
-  int rank = -1, size = -1;
-  PMPI_Comm_rank(comm, &rank);
-  PMPI_Comm_size(comm, &size);
-  fprintf(stderr, "[diag] rank %d/%d entering MPI_Reduce at %s:%d (count=%d, root=%d)\n",
-          rank, size, file, line, count, root);
-  fflush(stderr);
-  PMPI_Barrier(comm);
-
-  int rc = PMPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, comm);
-  if (rc != MPI_SUCCESS)
-  {
-    char errstr[MPI_MAX_ERROR_STRING];
-    int elen = 0;
-    PMPI_Error_string(rc, errstr, &elen);
-    fprintf(stderr, "[diag] MPI_Reduce FAILED at %s:%d on rank %d: %.*s\n",
-            file, line, rank, elen, errstr);
-    fflush(stderr);
-    PMPI_Abort(comm, rc);
-  }
-
-  PMPI_Barrier(comm);
-  if (rank == root)
-  {
-    fprintf(stderr, "[diag] MPI_Reduce OK at %s:%d (root=%d)\n", file, line, root);
-    fflush(stderr);
-  }
-  return rc;
-}
-
-#define MPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, comm) \
-  pin_MPI_Reduce_diag((sendbuf), (recvbuf), (count), (datatype), (op), (root), (comm), __FILE__, __LINE__)
-#endif /* DISABLE_MPI_REDUCE_DIAG */
-
 /* checks of compiler flags */
 #if defined(THREE_LPT) && !defined(TWO_LPT)
 #define TWO_LPT
@@ -177,6 +131,11 @@ static inline int pin_MPI_Reduce_diag(const void *sendbuf, void *recvbuf, int co
 
 #if defined(MOD_GRAV_FR) && defined(FR0)
 #warning "You have correctly compiled the code for the modified gravity scenario. However, please keep in mind that the modified gravity run (MOD_GRAV_FR) is still under development, and this mode should be used with extreme caution as it may not be fully stable. If you are unsure about its usage, please contact the developers for guidance."
+#endif
+
+/* Feature gating and sanity checks for Past Light Cone mass maps */
+#if defined(MASS_MAPS_FILTER_UNCOLLAPSED) && !defined(SNAPSHOT)
+#error "MASS_MAPS_FILTER_UNCOLLAPSED requires SNAPSHOT to provide per-particle collapse redshift (ZACC). Enable SNAPSHOT or disable MASS_MAPS_FILTER_UNCOLLAPSED."
 #endif
 
 /* vectorialization */
@@ -332,7 +291,10 @@ typedef struct
       CatalogInAscii, DoNotWriteCatalogs, DoNotWriteHistories, WriteTimelessSnapshot,
       OutputInH100, RandomSeed, MaxMem, NumFiles,
       BoxInH100, simpleLambda, AnalyticMassFunction, MinHaloMass, PLCProvideConeData, ExitIfExtraParticles,
-      use_transposed_fft, FixedIC, PairedIC;
+      use_transposed_fft, FixedIC, PairedIC,
+      NumMassPlanes,         /* number of mass planes for MASS_MAPS feature (0 disables) */
+      MassMapNSIDE;          /* HEALPix NSIDE for MASS_MAPS (0 disables) */
+  double MassMapMasterMaxGB; /* Max GB of memory rank 0 may use for one HEALPix plane (counts array) */
 #ifdef READ_HUBBLE_TABLE
   char HubbleTableFile[LBLENGTH];
 #endif
@@ -364,6 +326,45 @@ typedef struct
   double SafetyBorder, overhead;
 } subbox_data;
 extern subbox_data subbox;
+
+#ifdef MASS_MAPS
+/* ------------------------------------------------------------ */
+/* Mass sheet definitions derived from output redshift list     */
+/* Each consecutive pair (z_hi > z_lo) defines one sheet.       */
+/* ------------------------------------------------------------ */
+typedef struct
+{
+  double z_hi, z_lo;     /* redshift bounds (z_hi > z_lo) */
+  double chi_hi, chi_lo; /* comoving distances (same order) */
+  double inv_dchi;       /* 1/(chi_hi - chi_lo) */
+  double delta_z;        /* z_hi - z_lo */
+  double delta_chi;      /* chi_hi - chi_lo */
+  double da_hi, da_lo;   /* angular diameter distances at boundaries */
+  double chi3_diff;      /* chi_hi^3 - chi_lo^3 */
+} MassSheet;
+
+extern MassSheet *MassSheets;
+extern int NMassSheets;            /* = outputs.n - 1 when MASS_MAPS active */
+extern double *MassMapBoundaryZ;   /* length NMassSheets+1 (== outputs.n) */
+extern double *MassMapBoundaryChi; /* length NMassSheets+1 */
+extern double *MassMapBoundaryDA;  /* length NMassSheets+1 */
+int mass_maps_init_sheets(void);   /* allocate & fill MassSheets; returns 0 on success */
+void mass_maps_free_sheets(void);
+int mass_maps_write_sheet_table(void);
+
+/* MASS_MAPS / PLC auxiliary utilities */
+int mass_maps_particle_sign_change(int rep_id,
+                                   const double q[3],                      /* Lagrangian or reference position */
+                                   const double disp_prev[3],              /* previous total displacement */
+                                   const double disp_curr[3],              /* current total displacement */
+                                   double z_prev,                          /* previous redshift */
+                                   double z_curr,                          /* current redshift */
+                                   double *alpha_out,                      /* crossing interpolation fraction (0..1) */
+                                   double entry_pos[3]);                   /* interpolated entry Eulerian position */
+int mass_maps_point_inside_lightcone(const double pos[3], long *ipix_out); /* if inside and NSIDE>0 sets *ipix_out, else -1 */
+/* Segment-level orchestrator (called after build_groups). */
+void mass_maps_process_segment(int segment_index, double z_segment, int is_first_segment);
+#endif /* MASS_MAPS */
 
 typedef struct
 {
@@ -615,8 +616,8 @@ double GrowingMode_3LPT_1(double, double);
 double GrowingMode_3LPT_2(double, double);
 double InverseGrowingMode(double, int);
 double ComovingDistance(double);
+double DiameterDistance(double);
 double InverseComovingDistance(double);
-double dComovingDistance_dz(double);
 double PowerSpectrum(double);
 double MassVariance(double);
 double dMassVariance_dr(double);
@@ -638,6 +639,9 @@ int read_parameter_file();
 int compute_fmax(void);
 int compute_displacements(int, int, double);
 int compute_first_derivatives(double, int, int, double *);
+/* Fast path for scale-independent growth: rescale per-particle displacement
+  fields from z_prev to z_curr instead of recomputing FFT derivatives. */
+int scale_products_displacements(double z_prev, double z_curr);
 char *fdate(void);
 int dump_products(void);
 int read_dumps(void);
@@ -650,6 +654,8 @@ int compute_LPT_displacements(int, double);
 /* prototypes for functions defined in distribute.c */
 int distribute(void);
 int distribute_back(void);
+int my_distribute_back(void);
+int distribute_back_alltoall(void);
 
 /* prototypes for functions defined in fragment.c */
 int fragment_driver(void);

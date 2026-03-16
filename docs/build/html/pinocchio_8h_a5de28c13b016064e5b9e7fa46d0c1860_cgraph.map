@@ -1,0 +1,28 @@
+<map id="set_subboxes" name="set_subboxes">
+<area shape="rect" id="Node000001" title=" " alt="" coords="5,221,116,247"/>
+<area shape="rect" id="Node000002" href="$cosmo_8c.html#a3e2faa009164fa657b79bf92bbfbb407" title=" " alt="" coords="172,95,336,120"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="79,219,163,163,220,125,222,130,165,167,82,223"/>
+<area shape="rect" id="Node000009" href="$cosmo_8c.html#a66b5b059ca665289d407e13f98e6ff9a" title=" " alt="" coords="415,184,517,209"/>
+<area shape="poly" id="edge14_Node000001_Node000009" title=" " alt="" coords="107,219,164,207,290,196,401,193,401,199,290,202,164,213,108,224"/>
+<area shape="rect" id="Node000010" href="$initialization_8c.html#aec1f15f894c9438c327bea44bbf0dd07" title=" " alt="" coords="207,221,301,247"/>
+<area shape="poly" id="edge11_Node000001_Node000010" title=" " alt="" coords="116,231,193,231,193,237,116,237"/>
+<area shape="rect" id="Node000011" href="$initialization_8c.html#ab7a56be3865a96926f2ae44ec672fd89" title=" " alt="" coords="213,271,295,296"/>
+<area shape="poly" id="edge12_Node000001_Node000011" title=" " alt="" coords="112,244,200,267,198,272,110,249"/>
+<area shape="rect" id="Node000012" href="$allocations_8c.html#acdee6a9900e1b6cb341011445b640145" title=" " alt="" coords="164,320,344,345"/>
+<area shape="poly" id="edge13_Node000001_Node000012" title=" " alt="" coords="78,245,116,276,165,306,182,313,180,318,163,311,113,280,74,249"/>
+<area shape="rect" id="Node000003" href="$cosmo_8c.html#a7e6c85650740115e3cf73cca408cfc5a" title=" " alt="" coords="588,8,728,33"/>
+<area shape="poly" id="edge2_Node000002_Node000003" title=" " alt="" coords="268,92,319,53,354,33,391,18,438,8,485,4,574,6,574,12,486,9,438,14,393,23,356,38,322,58,271,97"/>
+<area shape="rect" id="Node000005" href="$cosmo_8c.html#a673892897db42773951bd46f397f914b" title=" " alt="" coords="392,33,540,59"/>
+<area shape="poly" id="edge4_Node000002_Node000005" title=" " alt="" coords="298,92,407,60,409,65,299,97"/>
+<area shape="rect" id="Node000006" href="$cosmo_8c.html#a9fbcf5b69c272e801cf320cf814b23c4" title=" " alt="" coords="410,83,522,108"/>
+<area shape="poly" id="edge5_Node000002_Node000006" title=" " alt="" coords="336,100,396,97,396,102,336,105"/>
+<area shape="rect" id="Node000008" href="$cosmo_8c.html#aa47020606869257e46b3a4f9071504d0" title=" " alt="" coords="602,132,714,157"/>
+<area shape="poly" id="edge8_Node000002_Node000008" title=" " alt="" coords="336,112,589,136,588,141,336,118"/>
+<area shape="poly" id="edge10_Node000002_Node000009" title=" " alt="" coords="286,118,423,176,421,181,284,123"/>
+<area shape="rect" id="Node000004" href="$cosmo_8c.html#a6341f5394ed17a00dc77c5519b292ae3" title=" " alt="" coords="776,83,900,108"/>
+<area shape="poly" id="edge3_Node000003_Node000004" title=" " alt="" coords="691,31,795,75,793,80,689,36"/>
+<area shape="rect" id="Node000007" href="$cosmo_8c.html#a8847e5b8ea1f9c458c8bf9e5f36837a9" title=" " alt="" coords="588,83,728,108"/>
+<area shape="poly" id="edge6_Node000006_Node000007" title=" " alt="" coords="522,93,574,93,574,98,522,98"/>
+<area shape="poly" id="edge7_Node000007_Node000004" title=" " alt="" coords="728,93,762,93,762,98,728,98"/>
+<area shape="poly" id="edge9_Node000008_Node000004" title=" " alt="" coords="704,129,776,109,778,115,706,135"/>
+</map>

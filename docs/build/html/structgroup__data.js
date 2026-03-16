@@ -1,0 +1,27 @@
+var structgroup__data =
+[
+    [ "bottom", "structgroup__data.html#a1f80454467d04c3f0da13eeb0ba1879a", null ],
+    [ "Flast", "structgroup__data.html#aa20746b859d0b8cf4e3ec9d05792bb9e", null ],
+    [ "good", "structgroup__data.html#a60246418a1c0a6c177ca57f936154ca3", null ],
+    [ "halo_app", "structgroup__data.html#aabad9ef1ea084676dff08cd7f015c932", null ],
+    [ "ll", "structgroup__data.html#a4f241df9935cc950ef6a6d2818f145b4", null ],
+    [ "Mass", "structgroup__data.html#a803c7f0460ea589e951410c6bead2539", null ],
+    [ "mass_at_merger", "structgroup__data.html#a2b1834676b2a594e17352bef7f18a41e", null ],
+    [ "merged_with", "structgroup__data.html#a2e0b7f2a7f9740381989212c0b571741", null ],
+    [ "name", "structgroup__data.html#adf092574dc644b3d6081f9f21c4b76d6", null ],
+    [ "point", "structgroup__data.html#a078b36b8303d8704931056a8101c57b3", null ],
+    [ "Pos", "structgroup__data.html#a99aa8bca1c007d1bfda0cbc73c02043b", null ],
+    [ "t_appear", "structgroup__data.html#a8c70859143393ad180f9ec6a816109a6", null ],
+    [ "t_merge", "structgroup__data.html#ad12e12b5c6c1728fc8406aacf76a3f88", null ],
+    [ "t_peak", "structgroup__data.html#a12198f7058e1dce8b68d3693562fde34", null ],
+    [ "trackC", "structgroup__data.html#abc0f9bd5ac16baddebd509597ccc9a4f", null ],
+    [ "trackT", "structgroup__data.html#ac03057fb1405453881d5edcc043992c2", null ],
+    [ "Vel", "structgroup__data.html#a43515f652bbb32281bacfc295b2e6ec9", null ],
+    [ "Vel_2LPT", "structgroup__data.html#a0221f00e67be968eda90a3193076823e", null ],
+    [ "Vel_2LPT_prev", "structgroup__data.html#a500f6f9d222bfffa2c13526748ba68e1", null ],
+    [ "Vel_3LPT_1", "structgroup__data.html#ad4498711a373a3bf387003c7b1ee71c0", null ],
+    [ "Vel_3LPT_1_prev", "structgroup__data.html#aedb441fb62a822d851121f6079dbbb1b", null ],
+    [ "Vel_3LPT_2", "structgroup__data.html#a8f9fdd471ff07959f8bccc177e229e91", null ],
+    [ "Vel_3LPT_2_prev", "structgroup__data.html#a2d5ffb04df4f67d1f540f54f7c99b4e7", null ],
+    [ "Vel_prev", "structgroup__data.html#ab45979a9ff1698b31a876f985ac95080", null ]
+];

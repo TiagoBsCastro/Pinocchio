@@ -1,0 +1,74 @@
+# Doxygen configuration for Pinocchio (C, MPI/OpenMP)
+# Run from src/Makefile via: make docs
+
+# Project identity
+PROJECT_NAME           = "Pinocchio"
+PROJECT_NUMBER         = "5.1"
+OUTPUT_DIRECTORY       = build
+CREATE_SUBDIRS         = NO
+FULL_PATH_NAMES        = NO
+STRIP_FROM_PATH        = ..
+
+# Input
+INPUT                  = ../src \
+						 ../scripts \
+						 ../context.py \
+						 ../example
+FILE_PATTERNS          = *.h *.c *.py
+RECURSIVE              = YES
+EXCLUDE_PATTERNS       = */.git/* */build/*
+
+# Language & extraction
+OPTIMIZE_OUTPUT_FOR_C  = YES
+PYTHON_DOCSTRING       = YES
+MARKDOWN_SUPPORT       = YES
+EXTENSION_MAPPING      = py=Python
+EXTRACT_ALL            = YES
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = YES
+EXTRACT_LOCAL_METHODS  = YES
+HIDE_UNDOC_MEMBERS     = NO
+HIDE_UNDOC_CLASSES     = NO
+
+# Preprocessing and macro handling
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = NO
+PREDEFINED             = MASS_MAPS \
+						 PLC \
+						 HAVE_CFITSIO \
+						 SNAPSHOT \
+						 RECOMPUTE_DISPLACEMENTS \
+						 TWO_LPT \
+						 THREE_LPT \
+						 MASS_MAPS_THREAD_ACCUM \
+						 MASS_MAPS_FILTER_UNCOLLAPSED \
+						 READ_HUBBLE_TABLE \
+						 DISP_HISTOGRAM \
+						 USE_FFT_THREADS
+
+# Warnings
+WARN_IF_UNDOCUMENTED   = YES
+WARN_IF_DOC_ERROR      = YES
+QUIET                  = NO
+
+# HTML output
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+GENERATE_TREEVIEW      = YES
+DISABLE_INDEX          = NO
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = YES
+REFERENCED_BY_RELATION = YES
+REFERENCES_RELATION    = YES
+REFERENCES_LINK_SOURCE = YES
+VERBATIM_HEADERS       = YES
+
+# LaTeX output
+GENERATE_LATEX         = NO
+
+# Dot (optional)
+HAVE_DOT               = YES
+DOT_IMAGE_FORMAT       = svg
+CALL_GRAPH             = YES
+CALLER_GRAPH           = YES
