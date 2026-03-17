@@ -102,6 +102,7 @@ OPTIONS += -DSNAPSHOT
 # -DUSE_DISTRIBUTE_ALLTOALL    Use all-to-all variant for forward product redistribution.
 OPTIONS += -DMASS_MAPS_MATCH_DIAG
 OPTIONS += -DREAD_PK_TABLE
+OPTIONS += -DUSE_DISTRIBUTE_ALLTOALL
 
 # f(R) gravity:
 # -DMOD_GRAV_FR                Enable modified gravity model (f(R)).

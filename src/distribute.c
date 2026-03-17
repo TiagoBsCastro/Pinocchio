@@ -259,6 +259,133 @@ int distribute_alltoall(void)
                 all_subboxes, 6, MPI_INT,
                 MPI_COMM_WORLD);
 
+#ifndef CLASSIC_FRAGMENTATION
+  /* -------------------------------------------------------------------
+   * Bitmap exchange: each receiver tells each sender which particles
+   * it actually needs, so the sender can pre-filter before Alltoallv.
+   * This replicates the build_distmap / update_distmap protocol of
+   * the old pairwise distribute(), but using collectives.
+   * ------------------------------------------------------------------- */
+
+  /* Gather all FFT boxes so the receiver can compute intersections
+     from the sender's perspective */
+  int *all_fftboxes = (int *)malloc(6 * ntasks * sizeof(int));
+  if (!all_fftboxes)
+  {
+    printf("ERROR on task %d: could not allocate all_fftboxes in distribute_alltoall\n", ThisTask);
+    fflush(stdout);
+    free(all_subboxes); free(sendcounts); free(recvcounts); free(sdispls); free(rdispls);
+    return 1;
+  }
+  MPI_Allgather(my_fft_box, 6, MPI_INT,
+                all_fftboxes, 6, MPI_INT,
+                MPI_COMM_WORLD);
+
+  /* Compute bitmap sizes for each (receiver=me, sender=s) pair */
+  int *bm_sendcounts = (int *)calloc(ntasks, sizeof(int));
+  int *bm_recvcounts = (int *)calloc(ntasks, sizeof(int));
+  int *bm_sdispls    = (int *)calloc(ntasks, sizeof(int));
+  int *bm_rdispls    = (int *)calloc(ntasks, sizeof(int));
+
+  if (!bm_sendcounts || !bm_recvcounts || !bm_sdispls || !bm_rdispls)
+  {
+    printf("ERROR on task %d: could not allocate bitmap bookkeeping in distribute_alltoall\n", ThisTask);
+    fflush(stdout);
+    free(all_fftboxes); free(all_subboxes);
+    free(sendcounts); free(recvcounts); free(sdispls); free(rdispls);
+    free(bm_sendcounts); free(bm_recvcounts); free(bm_sdispls); free(bm_rdispls);
+    return 1;
+  }
+
+  for (int s = 0; s < NTasks; s++)
+  {
+    if (s == ThisTask)
+      continue;
+    int sender_fft[6], my_sub_copy[6];
+    memcpy(sender_fft, all_fftboxes + 6 * s, 6 * sizeof(int));
+    memcpy(my_sub_copy, my_subbox, 6 * sizeof(int));
+    int interbox[48];
+    int Nint = intersection(sender_fft, my_sub_copy, interbox);
+    for (int box = 0; box < Nint; box++)
+    {
+      int off = box * 6;
+      unsigned int size = (unsigned int)interbox[3 + off] * interbox[4 + off] * interbox[5 + off];
+      bm_sendcounts[s] += (int)distmap_length(size);
+    }
+  }
+
+  MPI_Alltoall(bm_sendcounts, 1, MPI_INT,
+               bm_recvcounts, 1, MPI_INT,
+               MPI_COMM_WORLD);
+
+  int bm_total_send = 0, bm_total_recv = 0;
+  for (int t = 0; t < NTasks; t++)
+  {
+    bm_sdispls[t] = bm_total_send;
+    bm_total_send += bm_sendcounts[t];
+    bm_rdispls[t] = bm_total_recv;
+    bm_total_recv += bm_recvcounts[t];
+  }
+
+  unsigned int *bm_sendbuf = bm_total_send ? (unsigned int *)calloc((size_t)bm_total_send, sizeof(unsigned int)) : NULL;
+  unsigned int *bm_recvbuf = bm_total_recv ? (unsigned int *)calloc((size_t)bm_total_recv, sizeof(unsigned int)) : NULL;
+
+  if ((bm_total_send && !bm_sendbuf) || (bm_total_recv && !bm_recvbuf))
+  {
+    printf("ERROR on task %d: could not allocate bitmap buffers in distribute_alltoall\n", ThisTask);
+    fflush(stdout);
+    free(bm_sendbuf); free(bm_recvbuf);
+    free(bm_sendcounts); free(bm_recvcounts); free(bm_sdispls); free(bm_rdispls);
+    free(all_fftboxes); free(all_subboxes);
+    free(sendcounts); free(recvcounts); free(sdispls); free(rdispls);
+    return 1;
+  }
+
+  /* Build receiver-side bitmaps: for each sender s, which particles
+     in the intersection do I (the receiver) need? */
+  {
+    int *bm_offsets = (int *)calloc(ntasks, sizeof(int));
+    for (int t = 0; t < NTasks; t++)
+      bm_offsets[t] = bm_sdispls[t];
+
+    for (int s = 0; s < NTasks; s++)
+    {
+      if (s == ThisTask)
+        continue;
+      int sender_fft[6], my_sub_copy[6];
+      memcpy(sender_fft, all_fftboxes + 6 * s, 6 * sizeof(int));
+      memcpy(my_sub_copy, my_subbox, 6 * sizeof(int));
+      int interbox[48];
+      int Nint = intersection(sender_fft, my_sub_copy, interbox);
+      for (int box = 0; box < Nint; box++)
+      {
+        int off = box * 6;
+        unsigned int size = (unsigned int)interbox[3 + off] * interbox[4 + off] * interbox[5 + off];
+        unsigned int mapl = distmap_length(size);
+        build_distmap(&bm_sendbuf[bm_offsets[s]], interbox + off);
+        bm_offsets[s] += (int)mapl;
+      }
+    }
+    free(bm_offsets);
+  }
+  free(all_fftboxes);
+
+  /* Exchange bitmaps: each receiver sends its need-bitmap to each sender */
+  MPI_Alltoallv(bm_sendbuf, bm_sendcounts, bm_sdispls, MPI_UNSIGNED,
+                bm_recvbuf, bm_recvcounts, bm_rdispls, MPI_UNSIGNED,
+                MPI_COMM_WORLD);
+
+  free(bm_sendbuf);
+  free(bm_sendcounts);
+  free(bm_recvcounts);
+  free(bm_sdispls);
+  /* Keep bm_recvbuf and bm_rdispls alive: needed in count + pack loops */
+#endif /* !CLASSIC_FRAGMENTATION */
+
+  /* -------------------------------------------------------------------
+   * Count particles to send, using bitmap + Fmax filter (non-CLASSIC)
+   * or all intersection particles (CLASSIC)
+   * ------------------------------------------------------------------- */
   for (int dest = 0; dest < NTasks; dest++)
   {
     if (dest == ThisTask)
@@ -266,22 +393,30 @@ int distribute_alltoall(void)
 
     int subbox_target[6];
     int interbox[48], Nint, off;
-
     memcpy(subbox_target, all_subboxes + 6 * dest, 6 * sizeof(int));
     Nint = intersection(my_fft_box, subbox_target, interbox);
+
+#ifndef CLASSIC_FRAGMENTATION
+    unsigned int *bm_ptr = bm_recvbuf ? &bm_recvbuf[bm_rdispls[dest]] : NULL;
+#endif
 
     for (int box = 0; box < Nint; box++)
     {
       off = box * 6;
-      unsigned int size = interbox[3 + off] * interbox[4 + off] * interbox[5 + off];
+      unsigned int size = (unsigned int)interbox[3 + off] * interbox[4 + off] * interbox[5 + off];
+#ifndef CLASSIC_FRAGMENTATION
+      unsigned int mapl = distmap_length(size);
+      /* AND the receiver's bitmap with our Fmax filter */
+      update_distmap(bm_ptr, interbox + off);
       for (unsigned int i = 0; i < size; i++)
       {
-#ifndef CLASSIC_FRAGMENTATION
-        if (products[fft_space_index(i, interbox + off)].Fmax < outputs.Flast)
-          continue;
-#endif
-        sendcounts[dest]++;
+        if (get_distmap_bit(bm_ptr, i))
+          sendcounts[dest]++;
       }
+      bm_ptr += mapl;
+#else
+      sendcounts[dest] += (int)size;
+#endif
     }
   }
 
@@ -317,9 +452,18 @@ int distribute_alltoall(void)
     free(sendbuf);
     free(recvbuf);
     free(offset);
+#ifndef CLASSIC_FRAGMENTATION
+    free(bm_recvbuf);
+    free(bm_rdispls);
+#endif
     return 1;
   }
 
+  /* -------------------------------------------------------------------
+   * Pack send buffer: only particles passing bitmap + Fmax (non-CLASSIC)
+   * or all intersection particles (CLASSIC).  The bitmaps in bm_recvbuf
+   * were already AND-filtered with Fmax during the count loop above.
+   * ------------------------------------------------------------------- */
   for (int t = 0; t < NTasks; t++)
     offset[t] = sdispls[t];
 
@@ -333,17 +477,21 @@ int distribute_alltoall(void)
     memcpy(subbox_target, all_subboxes + 6 * dest, 6 * sizeof(int));
     Nint = intersection(my_fft_box, subbox_target, interbox);
 
+#ifndef CLASSIC_FRAGMENTATION
+    unsigned int *bm_ptr = bm_recvbuf ? &bm_recvbuf[bm_rdispls[dest]] : NULL;
+#endif
+
     for (int box = 0; box < Nint; box++)
     {
       off = box * 6;
-      unsigned int size = interbox[3 + off] * interbox[4 + off] * interbox[5 + off];
+      unsigned int size = (unsigned int)interbox[3 + off] * interbox[4 + off] * interbox[5 + off];
       for (unsigned int i = 0; i < size; i++)
       {
-        unsigned int pfft = fft_space_index(i, interbox + off);
 #ifndef CLASSIC_FRAGMENTATION
-        if (products[pfft].Fmax < outputs.Flast)
+        if (!get_distmap_bit(bm_ptr, i))
           continue;
 #endif
+        unsigned int pfft = fft_space_index(i, interbox + off);
         unsigned int ip, jp, kp, idx;
         INDEX_TO_COORD(i, ip, jp, kp, interbox + off + 3);
         g[_x_] = (ip + interbox[off + _x_]) % MyGrids[0].GSglobal[_x_];
@@ -353,8 +501,16 @@ int distribute_alltoall(void)
         sendbuf[idx].pos = COORD_TO_INDEX(g[_x_], g[_y_], g[_z_], MyGrids[0].GSglobal);
         memcpy(&sendbuf[idx].prod, &products[pfft], sizeof(product_data));
       }
+#ifndef CLASSIC_FRAGMENTATION
+      bm_ptr += distmap_length(size);
+#endif
     }
   }
+
+#ifndef CLASSIC_FRAGMENTATION
+  free(bm_recvbuf);
+  free(bm_rdispls);
+#endif
 
   MPI_Type_contiguous((int)sizeof(dist_data), MPI_BYTE, &dist_data_type);
   MPI_Type_commit(&dist_data_type);
@@ -375,6 +531,8 @@ int distribute_alltoall(void)
     l[_z_] = (g[_z_] - subbox.stabl[_z_] + MyGrids[0].GSglobal[_z_]) % MyGrids[0].GSglobal[_z_];
 
     unsigned int spos = COORD_TO_INDEX(l[_x_], l[_y_], l[_z_], subbox.Lgwbl);
+    /* With bitmap pre-filtering, all received particles should be wanted;
+       keep the check as a safety net */
     int wanted = map_to_be_used ? get_map_bit(spos) : get_mapup_bit(spos);
 
     if (wanted)
@@ -388,11 +546,14 @@ int distribute_alltoall(void)
     }
   }
 
-  unsigned int cap_left = (before_recv >= (unsigned int)subbox.Nalloc ? 0 : (unsigned int)subbox.Nalloc - before_recv);
-  if ((unsigned int)total_recv > cap_left)
+  unsigned int accepted = (unsigned int)(frag_offset - before_recv);
+  unsigned int cap_left = (before_recv >= (unsigned int)subbox.Nalloc
+                               ? 0
+                               : (unsigned int)subbox.Nalloc - before_recv);
+  if (accepted > cap_left)
   {
-    printf("WARNING on task %d: distribute_alltoall received more particles than cap allows (%u > %d)\n",
-           ThisTask, (unsigned int)total_recv, (int)cap_left);
+    printf("WARNING on task %d: distribute_alltoall accepted %u particles but only %u slots available\n",
+           ThisTask, accepted, cap_left);
     fflush(stdout);
   }
 
