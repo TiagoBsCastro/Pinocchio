@@ -99,6 +99,7 @@ OPTIONS += -DSNAPSHOT
 # -DRECOMPUTE_DISPLACEMENTS    Maintain prev/curr segment fields (needed for PLC crossings).
 # -DREAD_HUBBLE_TABLE          Read H(z) table for precise distances.
 # -DMASS_MAPS_MATCH_DIAG       Extra cross-matching diagnostics (debug).
+# -DUSE_DISTRIBUTE_ALLTOALL    Use all-to-all variant for forward product redistribution.
 OPTIONS += -DMASS_MAPS_MATCH_DIAG
 OPTIONS += -DREAD_PK_TABLE
 

@@ -247,7 +247,11 @@ int fragment()
     map_to_be_used = 0;
     if (!turn)
       subbox.Nneeded = 0;
+    #ifdef USE_DISTRIBUTE_ALLTOALL
+    if (distribute_alltoall())
+    #else
     if (distribute())
+    #endif
       return 1;
 
     tmp = MPI_Wtime() - tmp;
@@ -435,7 +439,11 @@ int fragment()
 
           map_to_be_used = 1;
           subbox.Nneeded = 0;
+          #ifdef USE_DISTRIBUTE_ALLTOALL
+          if (distribute_alltoall())
+          #else
           if (distribute())
+          #endif
             return 1;
           sort_and_organize();
 
