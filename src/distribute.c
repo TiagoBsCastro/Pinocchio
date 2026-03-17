@@ -58,6 +58,19 @@ typedef struct
   product_data prod;
 } dist_data;
 
+static int get_task_count_size(size_t *ntasks)
+{
+  if (NTasks <= 0)
+  {
+    printf("ERROR on task %d: invalid MPI task count %d in distribute\n", ThisTask, NTasks);
+    fflush(stdout);
+    return 1;
+  }
+
+  *ntasks = (size_t)NTasks;
+  return 0;
+}
+
 #ifdef DEBUG
 FILE *DBGFD;
 #endif
@@ -184,11 +197,15 @@ int distribute_alltoall(void)
   /* Distributes products from fft-space to sub-volumes using MPI_Alltoallv */
 
   int my_fft_box[6], my_subbox[6], g[3], l[3];
+  size_t ntasks;
   int *all_subboxes;
   int *sendcounts, *recvcounts, *sdispls, *rdispls, *offset;
   dist_data *sendbuf = NULL, *recvbuf = NULL;
   MPI_Datatype dist_data_type;
   unsigned int before_recv;
+
+  if (get_task_count_size(&ntasks))
+    return 1;
 
   my_fft_box[0] = MyGrids[0].GSstart[_x_];
   my_fft_box[1] = MyGrids[0].GSstart[_y_];
@@ -220,11 +237,11 @@ int distribute_alltoall(void)
   before_recv = 0;
 #endif
 
-  all_subboxes = (int *)malloc(6 * NTasks * sizeof(int));
-  sendcounts = (int *)calloc(NTasks, sizeof(int));
-  recvcounts = (int *)calloc(NTasks, sizeof(int));
-  sdispls = (int *)calloc(NTasks, sizeof(int));
-  rdispls = (int *)calloc(NTasks, sizeof(int));
+  all_subboxes = (int *)malloc(6 * ntasks * sizeof(int));
+  sendcounts = (int *)calloc(ntasks, sizeof(int));
+  recvcounts = (int *)calloc(ntasks, sizeof(int));
+  sdispls = (int *)calloc(ntasks, sizeof(int));
+  rdispls = (int *)calloc(ntasks, sizeof(int));
 
   if (!all_subboxes || !sendcounts || !recvcounts || !sdispls || !rdispls)
   {
@@ -286,7 +303,7 @@ int distribute_alltoall(void)
     sendbuf = (dist_data *)malloc((size_t)total_send * sizeof(dist_data));
   if (total_recv)
     recvbuf = (dist_data *)malloc((size_t)total_recv * sizeof(dist_data));
-  offset = (int *)calloc(NTasks, sizeof(int));
+  offset = (int *)calloc(ntasks, sizeof(int));
 
   if ((!sendbuf && total_send) || (!recvbuf && total_recv) || !offset)
   {
@@ -945,6 +962,10 @@ int distribute_back_alltoall(void)
 
   int my_fft_box[6];
   int This = ThisTask;
+  size_t ntasks;
+
+  if (get_task_count_size(&ntasks))
+    return 1;
 
   /* This defines the box that the task possesses in the FFT space */
   my_fft_box[0] = MyGrids[0].GSstart[_x_];
@@ -975,7 +996,7 @@ int distribute_back_alltoall(void)
    * 0) Gather all FFT boxes from all tasks
    * ------------------------------------------------------------------ */
 
-  int *all_boxes = (int *)malloc(6 * NTasks * sizeof(int));
+  int *all_boxes = (int *)malloc(6 * ntasks * sizeof(int));
   if (all_boxes == NULL)
   {
     printf("ERROR on task %d: could not allocate all_boxes\n", This);
@@ -992,10 +1013,10 @@ int distribute_back_alltoall(void)
    * 1) Count how many back_data entries go to each destination
    * ------------------------------------------------------------------ */
 
-  int *sendcounts = (int *)calloc(NTasks, sizeof(int));
-  int *recvcounts = (int *)calloc(NTasks, sizeof(int));
-  int *sdispls = (int *)calloc(NTasks, sizeof(int));
-  int *rdispls = (int *)calloc(NTasks, sizeof(int));
+  int *sendcounts = (int *)calloc(ntasks, sizeof(int));
+  int *recvcounts = (int *)calloc(ntasks, sizeof(int));
+  int *sdispls = (int *)calloc(ntasks, sizeof(int));
+  int *rdispls = (int *)calloc(ntasks, sizeof(int));
 
   if (!sendcounts || !recvcounts || !sdispls || !rdispls)
   {
@@ -1121,7 +1142,7 @@ int distribute_back_alltoall(void)
    * 4) Pack data into sendbuf grouped by destination
    * ------------------------------------------------------------------ */
 
-  int *offset = (int *)calloc(NTasks, sizeof(int));
+  int *offset = (int *)calloc(ntasks, sizeof(int));
   if (!offset)
   {
     printf("ERROR on task %d: could not allocate offset array\n", This);
