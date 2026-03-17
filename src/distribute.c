@@ -202,7 +202,7 @@ int distribute_alltoall(void)
   int *sendcounts, *recvcounts, *sdispls, *rdispls, *offset;
   dist_data *sendbuf = NULL, *recvbuf = NULL;
   MPI_Datatype dist_data_type;
-  unsigned int before_recv;
+  unsigned long long before_recv = 0ULL;
 
   if (get_task_count_size(&ntasks))
     return 1;
@@ -234,7 +234,7 @@ int distribute_alltoall(void)
 #ifndef CLASSIC_FRAGMENTATION
   before_recv = frag_offset;
 #else
-  before_recv = 0;
+  before_recv = 0ULL;
 #endif
 
   all_subboxes = (int *)malloc(6 * ntasks * sizeof(int));
@@ -345,6 +345,17 @@ int distribute_alltoall(void)
      in the intersection do I (the receiver) need? */
   {
     int *bm_offsets = (int *)calloc(ntasks, sizeof(int));
+    if (!bm_offsets)
+    {
+      printf("ERROR on task %d: could not allocate bm_offsets in distribute_alltoall\n", ThisTask);
+      fflush(stdout);
+      free(bm_sendbuf); free(bm_recvbuf);
+      free(bm_sendcounts); free(bm_recvcounts); free(bm_sdispls); free(bm_rdispls);
+      free(all_fftboxes); free(all_subboxes);
+      free(sendcounts); free(recvcounts); free(sdispls); free(rdispls);
+      return 1;
+    }
+
     for (int t = 0; t < NTasks; t++)
       bm_offsets[t] = bm_sdispls[t];
 
@@ -546,18 +557,18 @@ int distribute_alltoall(void)
     }
   }
 
-  unsigned int accepted = (unsigned int)(frag_offset - before_recv);
-  unsigned int cap_left = (before_recv >= (unsigned int)subbox.Nalloc
-                               ? 0
-                               : (unsigned int)subbox.Nalloc - before_recv);
+  unsigned long long accepted = frag_offset - before_recv;
+  unsigned long long cap_left = (before_recv >= (unsigned long long)subbox.Nalloc
+                                     ? 0ULL
+                                     : (unsigned long long)subbox.Nalloc - before_recv);
   if (accepted > cap_left)
   {
-    printf("WARNING on task %d: distribute_alltoall accepted %u particles but only %u slots available\n",
+    printf("WARNING on task %d: distribute_alltoall accepted %llu particles but only %llu slots available\n",
            ThisTask, accepted, cap_left);
     fflush(stdout);
   }
 
-  subbox.Nstored = (frag_offset > (unsigned int)subbox.Nalloc ? subbox.Nalloc : frag_offset);
+  subbox.Nstored = (frag_offset > (unsigned long long)subbox.Nalloc ? subbox.Nalloc : frag_offset);
   subbox.Nneeded = frag_offset;
 #else
   for (int i = 0; i < total_recv; i++)
