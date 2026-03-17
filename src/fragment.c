@@ -293,8 +293,8 @@ int fragment()
     MPI_Reduce(mynadd, nadd_all, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
 
     if (!ThisTask)
-      printf("[%s] %s re-distribution of Fmax done, %Ld particles stored by all tasks, average overhead: %f, cputime = %14.6f\n",
-             fdate(), (turn ? "Second" : "First"), nadd_all[0],
+      printf("[%s] %s re-distribution of Fmax done, %llu particles stored by all tasks, average overhead: %f, cputime = %14.6f\n",
+             fdate(), (turn ? "Second" : "First"), (unsigned long long)nadd_all[0],
              (float)nadd_all[0] / (float)MyGrids[0].Ntotal, tmp);
 
     mynadd[0] = subbox.Nstored;
@@ -347,8 +347,8 @@ int fragment()
 
     if (!ThisTask)
     {
-      printf("[%s] Task 0 found %d peaks, %d in the well resolved region. Total number of peaks: %Ld\n",
-             fdate(), Npeaks, Ngood, nadd_all[0]);
+      printf("[%s] Task 0 found %d peaks, %d in the well resolved region. Total number of peaks: %llu\n",
+             fdate(), Npeaks, Ngood, (unsigned long long)nadd_all[0]);
     }
 
     /* the number of peaks was supposed to be at most 1/10 of the number of particles
