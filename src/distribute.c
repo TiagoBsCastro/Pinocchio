@@ -43,6 +43,7 @@ int recv_data(int *, int);
 int keep_data(int *, int *);
 unsigned int fft_space_index(unsigned int, int *);
 unsigned int subbox_space_index(unsigned int, int *);
+int distribute_alltoall(void);
 #ifndef CLASSIC_FRAGMENTATION
 int get_distmap_bit(unsigned int *, unsigned int);
 void set_distmap_bit(unsigned int *, unsigned int, int);
@@ -50,6 +51,12 @@ void build_distmap(unsigned int *, int *);
 void update_distmap(unsigned int *, int *);
 unsigned int distmap_length(unsigned int);
 #endif
+
+typedef struct
+{
+  unsigned int pos;
+  product_data prod;
+} dist_data;
 
 #ifdef DEBUG
 FILE *DBGFD;
@@ -168,6 +175,239 @@ int distribute(void)
 #ifdef DEBUG
   fclose(DBGFD);
 #endif
+
+  return 0;
+}
+
+int distribute_alltoall(void)
+{
+  /* Distributes products from fft-space to sub-volumes using MPI_Alltoallv */
+
+  int my_fft_box[6], my_subbox[6], g[3], l[3];
+  int *all_subboxes;
+  int *sendcounts, *recvcounts, *sdispls, *rdispls, *offset;
+  dist_data *sendbuf = NULL, *recvbuf = NULL;
+  MPI_Datatype dist_data_type;
+  unsigned int before_recv;
+
+  my_fft_box[0] = MyGrids[0].GSstart[_x_];
+  my_fft_box[1] = MyGrids[0].GSstart[_y_];
+  my_fft_box[2] = MyGrids[0].GSstart[_z_];
+  my_fft_box[3] = MyGrids[0].GSlocal[_x_];
+  my_fft_box[4] = MyGrids[0].GSlocal[_y_];
+  my_fft_box[5] = MyGrids[0].GSlocal[_z_];
+
+  my_subbox[0] = subbox.stabl[_x_];
+  my_subbox[1] = subbox.stabl[_y_];
+  my_subbox[2] = subbox.stabl[_z_];
+  my_subbox[3] = subbox.Lgwbl[_x_];
+  my_subbox[4] = subbox.Lgwbl[_y_];
+  my_subbox[5] = subbox.Lgwbl[_z_];
+
+  fflush(stdout);
+  MPI_Barrier(MPI_COMM_WORLD);
+
+#ifndef CLASSIC_FRAGMENTATION
+  frag_offset = subbox.Nneeded;
+#endif
+
+  if (keep_data(my_fft_box, my_subbox))
+    return 1;
+
+#ifndef CLASSIC_FRAGMENTATION
+  before_recv = frag_offset;
+#else
+  before_recv = 0;
+#endif
+
+  all_subboxes = (int *)malloc(6 * NTasks * sizeof(int));
+  sendcounts = (int *)calloc(NTasks, sizeof(int));
+  recvcounts = (int *)calloc(NTasks, sizeof(int));
+  sdispls = (int *)calloc(NTasks, sizeof(int));
+  rdispls = (int *)calloc(NTasks, sizeof(int));
+
+  if (!all_subboxes || !sendcounts || !recvcounts || !sdispls || !rdispls)
+  {
+    printf("ERROR on task %d: could not allocate alltoall bookkeeping in distribute_alltoall\n", ThisTask);
+    fflush(stdout);
+    free(all_subboxes);
+    free(sendcounts);
+    free(recvcounts);
+    free(sdispls);
+    free(rdispls);
+    return 1;
+  }
+
+  MPI_Allgather(my_subbox, 6, MPI_INT,
+                all_subboxes, 6, MPI_INT,
+                MPI_COMM_WORLD);
+
+  for (int dest = 0; dest < NTasks; dest++)
+  {
+    if (dest == ThisTask)
+      continue;
+
+    int subbox_target[6];
+    int interbox[48], Nint, off;
+
+    memcpy(subbox_target, all_subboxes + 6 * dest, 6 * sizeof(int));
+    Nint = intersection(my_fft_box, subbox_target, interbox);
+
+    for (int box = 0; box < Nint; box++)
+    {
+      off = box * 6;
+      unsigned int size = interbox[3 + off] * interbox[4 + off] * interbox[5 + off];
+      for (unsigned int i = 0; i < size; i++)
+      {
+#ifndef CLASSIC_FRAGMENTATION
+        if (products[fft_space_index(i, interbox + off)].Fmax < outputs.Flast)
+          continue;
+#endif
+        sendcounts[dest]++;
+      }
+    }
+  }
+
+  MPI_Alltoall(sendcounts, 1, MPI_INT,
+               recvcounts, 1, MPI_INT,
+               MPI_COMM_WORLD);
+
+  int total_send = 0;
+  int total_recv = 0;
+  for (int t = 0; t < NTasks; t++)
+  {
+    sdispls[t] = total_send;
+    total_send += sendcounts[t];
+    rdispls[t] = total_recv;
+    total_recv += recvcounts[t];
+  }
+
+  if (total_send)
+    sendbuf = (dist_data *)malloc((size_t)total_send * sizeof(dist_data));
+  if (total_recv)
+    recvbuf = (dist_data *)malloc((size_t)total_recv * sizeof(dist_data));
+  offset = (int *)calloc(NTasks, sizeof(int));
+
+  if ((!sendbuf && total_send) || (!recvbuf && total_recv) || !offset)
+  {
+    printf("ERROR on task %d: could not allocate alltoall buffers in distribute_alltoall\n", ThisTask);
+    fflush(stdout);
+    free(all_subboxes);
+    free(sendcounts);
+    free(recvcounts);
+    free(sdispls);
+    free(rdispls);
+    free(sendbuf);
+    free(recvbuf);
+    free(offset);
+    return 1;
+  }
+
+  for (int t = 0; t < NTasks; t++)
+    offset[t] = sdispls[t];
+
+  for (int dest = 0; dest < NTasks; dest++)
+  {
+    if (dest == ThisTask)
+      continue;
+
+    int subbox_target[6];
+    int interbox[48], Nint, off;
+    memcpy(subbox_target, all_subboxes + 6 * dest, 6 * sizeof(int));
+    Nint = intersection(my_fft_box, subbox_target, interbox);
+
+    for (int box = 0; box < Nint; box++)
+    {
+      off = box * 6;
+      unsigned int size = interbox[3 + off] * interbox[4 + off] * interbox[5 + off];
+      for (unsigned int i = 0; i < size; i++)
+      {
+        unsigned int pfft = fft_space_index(i, interbox + off);
+#ifndef CLASSIC_FRAGMENTATION
+        if (products[pfft].Fmax < outputs.Flast)
+          continue;
+#endif
+        unsigned int ip, jp, kp, idx;
+        INDEX_TO_COORD(i, ip, jp, kp, interbox + off + 3);
+        g[_x_] = (ip + interbox[off + _x_]) % MyGrids[0].GSglobal[_x_];
+        g[_y_] = (jp + interbox[off + _y_]) % MyGrids[0].GSglobal[_y_];
+        g[_z_] = (kp + interbox[off + _z_]) % MyGrids[0].GSglobal[_z_];
+        idx = offset[dest]++;
+        sendbuf[idx].pos = COORD_TO_INDEX(g[_x_], g[_y_], g[_z_], MyGrids[0].GSglobal);
+        memcpy(&sendbuf[idx].prod, &products[pfft], sizeof(product_data));
+      }
+    }
+  }
+
+  MPI_Type_contiguous((int)sizeof(dist_data), MPI_BYTE, &dist_data_type);
+  MPI_Type_commit(&dist_data_type);
+
+  MPI_Alltoallv(sendbuf, sendcounts, sdispls, dist_data_type,
+                recvbuf, recvcounts, rdispls, dist_data_type,
+                MPI_COMM_WORLD);
+
+  MPI_Type_free(&dist_data_type);
+
+#ifndef CLASSIC_FRAGMENTATION
+  for (int i = 0; i < total_recv; i++)
+  {
+    INDEX_TO_COORD(recvbuf[i].pos, g[_x_], g[_y_], g[_z_], MyGrids[0].GSglobal);
+
+    l[_x_] = (g[_x_] - subbox.stabl[_x_] + MyGrids[0].GSglobal[_x_]) % MyGrids[0].GSglobal[_x_];
+    l[_y_] = (g[_y_] - subbox.stabl[_y_] + MyGrids[0].GSglobal[_y_]) % MyGrids[0].GSglobal[_y_];
+    l[_z_] = (g[_z_] - subbox.stabl[_z_] + MyGrids[0].GSglobal[_z_]) % MyGrids[0].GSglobal[_z_];
+
+    unsigned int spos = COORD_TO_INDEX(l[_x_], l[_y_], l[_z_], subbox.Lgwbl);
+    int wanted = map_to_be_used ? get_map_bit(spos) : get_mapup_bit(spos);
+
+    if (wanted)
+    {
+      if (frag_offset < subbox.Nalloc)
+      {
+        frag_pos[frag_offset] = spos;
+        memcpy(&frag[frag_offset], &recvbuf[i].prod, sizeof(product_data));
+      }
+      ++frag_offset;
+    }
+  }
+
+  unsigned int cap_left = (before_recv >= (unsigned int)subbox.Nalloc ? 0 : (unsigned int)subbox.Nalloc - before_recv);
+  if ((unsigned int)total_recv > cap_left)
+  {
+    printf("WARNING on task %d: distribute_alltoall received more particles than cap allows (%u > %d)\n",
+           ThisTask, (unsigned int)total_recv, (int)cap_left);
+    fflush(stdout);
+  }
+
+  subbox.Nstored = (frag_offset > (unsigned int)subbox.Nalloc ? subbox.Nalloc : frag_offset);
+  subbox.Nneeded = frag_offset;
+#else
+  for (int i = 0; i < total_recv; i++)
+  {
+    INDEX_TO_COORD(recvbuf[i].pos, g[_x_], g[_y_], g[_z_], MyGrids[0].GSglobal);
+
+    l[_x_] = (g[_x_] - subbox.stabl[_x_] + MyGrids[0].GSglobal[_x_]) % MyGrids[0].GSglobal[_x_];
+    l[_y_] = (g[_y_] - subbox.stabl[_y_] + MyGrids[0].GSglobal[_y_]) % MyGrids[0].GSglobal[_y_];
+    l[_z_] = (g[_z_] - subbox.stabl[_z_] + MyGrids[0].GSglobal[_z_]) % MyGrids[0].GSglobal[_z_];
+
+    unsigned int spos = COORD_TO_INDEX(l[_x_], l[_y_], l[_z_], subbox.Lgwbl);
+    memcpy(&frag[spos], &recvbuf[i].prod, sizeof(product_data));
+  }
+  (void)before_recv;
+  subbox.Nstored = subbox.Npart;
+#endif
+
+  free(offset);
+  free(recvbuf);
+  free(sendbuf);
+  free(all_subboxes);
+  free(sendcounts);
+  free(recvcounts);
+  free(sdispls);
+  free(rdispls);
+
+  fflush(stdout);
+  MPI_Barrier(MPI_COMM_WORLD);
 
   return 0;
 }
