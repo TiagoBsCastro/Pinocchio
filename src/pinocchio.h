@@ -81,8 +81,8 @@
 // #define ADD_RMAX_TO_SNAPSHOT
 
 /* these templates define how to pass from coordinates to indices */
-#define INDEX_TO_COORD(I, X, Y, Z, L) ({Z=(I)%L[_z_]; int _KK_=(I)/L[_z_]; Y=_KK_%L[_y_]; X=_KK_/L[_y_]; })
-#define COORD_TO_INDEX(X, Y, Z, L) ((Z) + L[_z_] * ((Y) + L[_y_] * (X)))
+#define INDEX_TO_COORD(I, X, Y, Z, L) ({(Z) = (I) % (L)[_z_]; int _KK_ = (I) / (L)[_z_]; (Y) = _KK_ % (L)[_y_]; (X) = _KK_ / (L)[_y_]; })
+#define COORD_TO_INDEX(X, Y, Z, L) ((Z) + (L)[_z_] * ((Y) + (L)[_y_] * (X)))
 
 /* coordinates */
 #define _x_ 0
