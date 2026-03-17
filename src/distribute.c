@@ -328,7 +328,7 @@ int distribute_alltoall(void)
           continue;
 #endif
         unsigned int ip, jp, kp, idx;
-        INDEX_TO_COORD(i, ip, jp, kp, (interbox + off + 3));
+        INDEX_TO_COORD(i, ip, jp, kp, interbox + off + 3);
         g[_x_] = (ip + interbox[off + _x_]) % MyGrids[0].GSglobal[_x_];
         g[_y_] = (jp + interbox[off + _y_]) % MyGrids[0].GSglobal[_y_];
         g[_z_] = (kp + interbox[off + _z_]) % MyGrids[0].GSglobal[_z_];
