@@ -989,15 +989,29 @@ static double CumulativeNumberDensityAboveMass(double Mmin, double z)
   F.function = &integrand_ngt_lnM;
   F.params = &par;
 
-  /* integrate from ln(Mmin) to +infinity */
-  status = gsl_integration_qagiu(&F, log(Mmin),
-                                 0.0,    /* epsabs */
-                                 1.0e-4, /* epsrel */
-                                 NWINT,
-                                 workspace,
-                                 &result, &error);
+  /* turn off default GSL error handler to prevent abort on convergence issues */
+  gsl_error_handler_t *old_handler = gsl_set_error_handler_off();
 
-  if (status != GSL_SUCCESS || !isfinite(result) || result < 0.0)
+  /* integrate from ln(Mmin) to ln(Mmax) with a finite upper limit;
+     the mass function is negligible above 1e18 Msun */
+  double lnMmax = log(1.0e18);
+  if (log(Mmin) >= lnMmax)
+  {
+    gsl_set_error_handler(old_handler);
+    return 0.0;
+  }
+
+  status = gsl_integration_qags(&F, log(Mmin), lnMmax,
+                                0.0,    /* epsabs */
+                                1.0e-4, /* epsrel */
+                                NWINT,
+                                workspace,
+                                &result, &error);
+
+  /* restore previous handler */
+  gsl_set_error_handler(old_handler);
+
+  if (!isfinite(result) || result < 0.0)
     return 0.0;
 
   return result;
