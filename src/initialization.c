@@ -220,7 +220,7 @@ int set_parameters()
   int i;
 
   /* set default internal parameters */
-  internal.verbose_level = VXX;
+  internal.verbose_level = VMSG;
   internal.dump_seedplane = 0;
   internal.dump_kdensity = 0;
   internal.large_plane = 1;
