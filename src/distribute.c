@@ -271,6 +271,9 @@ int distribute_alltoall(void)
   MPI_Datatype dist_data_type = MPI_DATATYPE_NULL;
   int dtype_committed = 0;
 
+  double t_phase, t_keep, t_plan, t_bm_build, t_bm_xchg, t_filter, t_alltoall, t_hypercube;
+  double t_min, t_max;
+
   if (get_task_count_size(&ntasks))
     return 1;
 
@@ -293,12 +296,15 @@ int distribute_alltoall(void)
 
   frag_offset = subbox.Nneeded;
 
+  t_phase = MPI_Wtime();
   if (keep_data(my_fft_box, my_subbox))
     goto fail;
 
   before_recv = frag_offset;
+  t_keep = MPI_Wtime() - t_phase;
 
   /* ---- Gather all boxes ---- */
+  t_phase = MPI_Wtime();
   all_fftboxes = (int *)malloc(6 * ntasks * sizeof(int));
   all_subboxes = (int *)malloc(6 * ntasks * sizeof(int));
   plan = (dist_peer_plan *)calloc(ntasks, sizeof(dist_peer_plan));
@@ -341,6 +347,7 @@ int distribute_alltoall(void)
   all_fftboxes = NULL;
   free(all_subboxes);
   all_subboxes = NULL;
+  t_plan = MPI_Wtime() - t_phase;
 
   /* ---- Allocate bitmap flat buffers ---- */
   bm_sdispls = (int *)calloc(ntasks, sizeof(int));
@@ -387,6 +394,7 @@ int distribute_alltoall(void)
   }
 
   /* ---- Build receiver-side need-bitmaps ---- */
+  t_phase = MPI_Wtime();
   for (int peer = 0; peer < NTasks; peer++)
   {
     if (peer == ThisTask || plan[peer].bm_sendcount == 0)
@@ -402,7 +410,10 @@ int distribute_alltoall(void)
     }
   }
 
+  t_bm_build = MPI_Wtime() - t_phase;
+
   /* ---- Exchange bitmaps via non-blocking point-to-point ---- */
+  t_phase = MPI_Wtime();
   reqs = (MPI_Request *)malloc(2 * ntasks * sizeof(MPI_Request));
   if (!reqs)
   {
@@ -441,8 +452,10 @@ int distribute_alltoall(void)
   bm_sendbuf = NULL;
   free(bm_sdispls);
   bm_sdispls = NULL;
+  t_bm_xchg = MPI_Wtime() - t_phase;
 
   /* ---- Sender-side Fmax filtering + particle count ---- */
+  t_phase = MPI_Wtime();
   sendcounts = (int *)calloc(ntasks, sizeof(int));
   recvcounts = (int *)calloc(ntasks, sizeof(int));
 
@@ -478,7 +491,11 @@ int distribute_alltoall(void)
     sendcounts[peer] = count;
   }
 
+  t_filter = MPI_Wtime() - t_phase;
+
+  t_phase = MPI_Wtime();
   MPI_Alltoall(sendcounts, 1, MPI_INT, recvcounts, 1, MPI_INT, MPI_COMM_WORLD);
+  t_alltoall = MPI_Wtime() - t_phase;
 
   for (int peer = 0; peer < NTasks; peer++)
     plan[peer].recvcount = recvcounts[peer];
@@ -500,6 +517,7 @@ int distribute_alltoall(void)
   }
 
   /* ---- Hypercube data exchange using cached plan ---- */
+  t_phase = MPI_Wtime();
   {
     int log_ntask;
     for (log_ntask = 0; log_ntask < 1000; log_ntask++)
@@ -596,6 +614,38 @@ int distribute_alltoall(void)
           }
         }
       }
+    }
+  }
+
+  t_hypercube = MPI_Wtime() - t_phase;
+
+  /* ---- Phase timing report ---- */
+  if (!ThisTask)
+    printf("  distribute_alltoall phase timings (task 0):\n"
+           "    keep_data:     %10.3f s\n"
+           "    plan+gather:   %10.3f s\n"
+           "    bitmap build:  %10.3f s\n"
+           "    bitmap xchg:   %10.3f s\n"
+           "    Fmax filter:   %10.3f s\n"
+           "    alltoall cnt:  %10.3f s\n"
+           "    hypercube:     %10.3f s\n",
+           t_keep, t_plan, t_bm_build, t_bm_xchg, t_filter, t_alltoall, t_hypercube);
+
+  /* Report min/max across tasks for each phase to detect outliers */
+  {
+    double my_times[7] = {t_keep, t_plan, t_bm_build, t_bm_xchg, t_filter, t_alltoall, t_hypercube};
+    double min_times[7], max_times[7];
+    MPI_Reduce(my_times, min_times, 7, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
+    MPI_Reduce(my_times, max_times, 7, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    if (!ThisTask)
+    {
+      const char *labels[7] = {"keep_data", "plan+gather", "bitmap build",
+                               "bitmap xchg", "Fmax filter", "alltoall cnt", "hypercube"};
+      printf("  distribute_alltoall min/max across %d tasks:\n", NTasks);
+      for (int ph = 0; ph < 7; ph++)
+        printf("    %-14s  min=%10.3f  max=%10.3f  (spread=%.1fx)\n",
+               labels[ph], min_times[ph], max_times[ph],
+               min_times[ph] > 0.001 ? max_times[ph] / min_times[ph] : 0.0);
     }
   }
 
