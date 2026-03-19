@@ -960,6 +960,49 @@ int set_plc()
 
 #endif
 
+/* Auxiliary functions for the division in sub-boxes */
+typedef struct
+{
+  double z;
+} ngtmass_params;
+
+static double integrand_ngt_lnM(double lnM, void *p)
+{
+  const ngtmass_params *par = (const ngtmass_params *)p;
+  const double M = exp(lnM);
+
+  /* dn/dlnM = M * dn/dM */
+  return M * AnalyticMassFunction(M, par->z);
+}
+
+static double CumulativeNumberDensityAboveMass(double Mmin, double z)
+{
+  gsl_function F;
+  ngtmass_params par;
+  double result = 0.0, error = 0.0;
+  int status;
+
+  if (Mmin <= 0.0)
+    return 0.0;
+
+  par.z = z;
+  F.function = &integrand_ngt_lnM;
+  F.params = &par;
+
+  /* integrate from ln(Mmin) to +infinity */
+  status = gsl_integration_qagiu(&F, log(Mmin),
+                                 0.0,    /* epsabs */
+                                 1.0e-4, /* epsrel */
+                                 NWINT,
+                                 workspace,
+                                 &result, &error);
+
+  if (status != GSL_SUCCESS || !isfinite(result) || result < 0.0)
+    return 0.0;
+
+  return result;
+}
+
 /* division in sub-boxes */
 int set_subboxes()
 {
@@ -968,14 +1011,55 @@ int set_subboxes()
   unsigned long long int surface, this, tt;
   double size, sizeG, cc;
 
-  /* mass of the largest halo expected in the box */
-  params.Largest = 1.e18;
-  cc = 1. / pow(params.BoxSize_htrue, 3.0);
-  double aa = AnalyticMassFunction(params.Largest, outputs.zlast);
-  while (aa * params.Largest < cc)
+  /* mass of the largest halo expected in the box:
+   solve n(>M, zlast) = 1 / Vbox */
+  cc = 1.0 / pow(params.BoxSize_htrue, 3.0);
+
+  double M_lo = params.MinHaloMass * params.ParticleMass;
+  double M_hi = 1.0e18;
+  double n_lo = CumulativeNumberDensityAboveMass(M_lo, outputs.zlast);
+  double n_hi = CumulativeNumberDensityAboveMass(M_hi, outputs.zlast);
+
+  /* conservative fallback: if even the minimum resolved halo is rarer than 1 per box,
+     use the minimum resolved halo mass */
+  if (n_lo < cc)
   {
-    params.Largest *= 0.99;
-    aa = AnalyticMassFunction(params.Largest, outputs.zlast);
+    params.Largest = M_lo;
+  }
+  else
+  {
+    /* ensure upper bracket has n(>M_hi) < 1/V */
+    while (n_hi > cc)
+    {
+      M_hi *= 2.0;
+      n_hi = CumulativeNumberDensityAboveMass(M_hi, outputs.zlast);
+
+      /* emergency stop to avoid pathological infinite loops */
+      if (M_hi > 1.0e22)
+        break;
+    }
+
+    /* if needed, move lower bracket downward */
+    while (n_lo < cc && M_lo > params.ParticleMass)
+    {
+      M_lo *= 0.5;
+      n_lo = CumulativeNumberDensityAboveMass(M_lo, outputs.zlast);
+    }
+
+    /* bisection in ln M */
+    for (int iter = 0; iter < 60; iter++)
+    {
+      double lnM_mid = 0.5 * (log(M_lo) + log(M_hi));
+      double M_mid = exp(lnM_mid);
+      double n_mid = CumulativeNumberDensityAboveMass(M_mid, outputs.zlast);
+
+      if (n_mid > cc)
+        M_lo = M_mid;
+      else
+        M_hi = M_mid;
+    }
+
+    params.Largest = exp(0.5 * (log(M_lo) + log(M_hi)));
   }
   size = SizeForMass(params.Largest);
   sizeG = size / params.InterPartDist;
