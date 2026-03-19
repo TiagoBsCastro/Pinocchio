@@ -245,9 +245,10 @@ int read_parameter_file()
     addr[nt] = &params.ReadProductsFromDumps;
     id[nt++] = LOGICAL;
 
+    params.ExitIfExtraParticles = 1; /* default: exit on overflow */
     strcpy(tag[nt], "ExitIfExtraParticles");
     addr[nt] = &params.ExitIfExtraParticles;
-    id[nt++] = LOGICAL;
+    id[nt++] = INT_SKIP_DEF;
 
     strcpy(tag[nt], "UseTransposedFFT");
     addr[nt] = &(params.use_transposed_fft);
@@ -270,10 +271,10 @@ int read_parameter_file()
     id[nt++] = INT_SKIP_DEF;
 
 #ifdef MASS_MAPS
-  /* Mass maps parameters */
-  strcpy(tag[nt], "MassMapNSIDE");
-  addr[nt] = &params.MassMapNSIDE;
-  id[nt++] = INT_SKIP_DEF; /* required if MASS_MAPS active */
+    /* Mass maps parameters */
+    strcpy(tag[nt], "MassMapNSIDE");
+    addr[nt] = &params.MassMapNSIDE;
+    id[nt++] = INT_SKIP_DEF; /* required if MASS_MAPS active */
 #endif
 
     strcpy(tag[nt], "LargePlane");
@@ -414,7 +415,7 @@ int read_parameter_file()
       return 2;
     }
 
-  /* Checks that all parameters are found */
+    /* Checks that all parameters are found */
     for (i = 0; i < nt; i++)
     {
       if (*tag[i])
@@ -430,7 +431,7 @@ int read_parameter_file()
       }
     }
 
-  /* Now opens and reads the list of wanted outputs */
+    /* Now opens and reads the list of wanted outputs */
     outputs.n = 0;
     if ((fd = fopen(params.OutputList, "r")))
       while (!feof(fd))
@@ -467,12 +468,14 @@ int read_parameter_file()
 
 #ifdef MASS_MAPS
     /* Validate MassMapNSIDE */
-    if (params.MassMapNSIDE <= 0) {
+    if (params.MassMapNSIDE <= 0)
+    {
       printf("ERROR on task 0: MassMapNSIDE must be > 0 when MASS_MAPS is compiled.\n");
       fflush(stdout);
       return 1;
     }
-    if ( (params.MassMapNSIDE & (params.MassMapNSIDE - 1)) != 0) {
+    if ((params.MassMapNSIDE & (params.MassMapNSIDE - 1)) != 0)
+    {
       printf("ERROR on task 0: MassMapNSIDE=%d is not a power of two.\n", params.MassMapNSIDE);
       fflush(stdout);
       return 1;
