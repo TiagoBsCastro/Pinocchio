@@ -247,11 +247,11 @@ int fragment()
     map_to_be_used = 0;
     if (!turn)
       subbox.Nneeded = 0;
-    #ifdef USE_DISTRIBUTE_ALLTOALL
+#ifdef USE_DISTRIBUTE_ALLTOALL
     if (distribute_alltoall())
-    #else
+#else
     if (distribute())
-    #endif
+#endif
       return 1;
 
     tmp = MPI_Wtime() - tmp;
@@ -305,6 +305,39 @@ int fragment()
       printf("[%s] Smallest and largest overhead: %f, %f\n", fdate(),
              (float)nadd_all[0] / (float)MyGrids[0].ParticlesPerTask,
              (float)nadd_all[1] / (float)MyGrids[0].ParticlesPerTask);
+
+    /* warn if MaxMemPerParticle is significantly larger than needed */
+    if (turn)
+    {
+      unsigned int maxNneeded;
+      MPI_Reduce(&subbox.Nneeded, &maxNneeded, 1, MPI_UNSIGNED, MPI_MAX, 0, MPI_COMM_WORLD);
+      MPI_Bcast(&maxNneeded, 1, MPI_UNSIGNED, 0, MPI_COMM_WORLD);
+
+      if (subbox.Nalloc > (unsigned int)(1.5 * maxNneeded))
+      {
+        size_t other_mem = memory.prods + memory.groups
+#ifdef RECOMPUTE_DISPLACEMENTS
+                           + memory.fields_to_keep + memory.fft
+#endif
+            ;
+        /* recommended value: enough for 1.2 * maxNneeded */
+        int recommended = (int)((other_mem +
+                                 (size_t)(1.2 * maxNneeded + 10) *
+                                     (sizeof(product_data) + FRAGFIELDS * sizeof(int))) /
+                                MyGrids[0].ParticlesPerTask) +
+                          1;
+
+        if (!ThisTask)
+        {
+          printf("WARNING: MaxMemPerParticle (%d) is significantly larger than needed.\n",
+                 (int)params.MaxMemPerParticle);
+          printf("         Nalloc=%d but the maximum Nneeded across all tasks is only %d (ratio %.2f).\n",
+                 subbox.Nalloc, maxNneeded, (float)subbox.Nalloc / (float)maxNneeded);
+          printf("         Excess memory wastes cache and bandwidth during distribution.\n");
+          printf("         Consider reducing MaxMemPerParticle to ~%d.\n", recommended);
+        }
+      }
+    }
 
     /* sets or updates the map of potentially loaded particles */
     if (!turn)
@@ -439,11 +472,11 @@ int fragment()
 
           map_to_be_used = 1;
           subbox.Nneeded = 0;
-          #ifdef USE_DISTRIBUTE_ALLTOALL
+#ifdef USE_DISTRIBUTE_ALLTOALL
           if (distribute_alltoall())
-          #else
+#else
           if (distribute())
-          #endif
+#endif
             return 1;
           sort_and_organize();
 
