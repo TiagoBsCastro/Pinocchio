@@ -931,13 +931,13 @@ int recompute_group_velocities()
   /* Recompute average displacements of group velocities */
   int next, npart, i, ia;
   for (i = FILAMENT + 1; i <= ngroups; i++)
-    if (groups[i].point > 0)
+    if (groups[i].point >= 0)
     {
       for (ia = 0; ia < 3; ia++)
       {
         groups[i].Vel_prev[ia] = groups[i].Vel[ia] = 0;
 #ifdef TWO_LPT
-        groups[i].Vel_prev[ia] = groups[i].Vel_2LPT[ia] = 0.;
+        groups[i].Vel_2LPT_prev[ia] = groups[i].Vel_2LPT[ia] = 0.;
 #ifdef THREE_LPT
         groups[i].Vel_3LPT_1_prev[ia] = groups[i].Vel_3LPT_1[ia] =
             groups[i].Vel_3LPT_2_prev[ia] = groups[i].Vel_3LPT_2[ia] = 0;

@@ -1557,7 +1557,7 @@ int check_parameters_and_directives(void)
 
 #ifdef SCALE_DEPENDENT
 #include "def_splines.h"
-#define SMALLDIFF ((double)1.e-5)
+#define SMALLDIFF ((double)1.e-4)
 #define TOLERANCE ((double)1.e-4)
 #define MAXITER 20
 // #define DEBUG

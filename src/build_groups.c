@@ -1701,7 +1701,7 @@ PRODFLOAT q2x(int i, pos_data *myobj, int pbc, double Box, int order)
       pos += (1. - myobj->w2) * myobj->v2_prev[i] + myobj->w2 * myobj->v2[i];
 #ifdef THREE_LPT
     if (order > 2)
-      pos += (1. - myobj->w31) * myobj->v31_prev[i] + myobj->w31 * myobj->v32[i] + (1. - myobj->w32) * myobj->v32_prev[i] + myobj->w32 * myobj->v32[i];
+      pos += (1. - myobj->w31) * myobj->v31_prev[i] + myobj->w31 * myobj->v31[i] + (1. - myobj->w32) * myobj->v32_prev[i] + myobj->w32 * myobj->v32[i];
 #endif
 #endif
   }

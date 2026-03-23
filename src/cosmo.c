@@ -1353,8 +1353,8 @@ int read_Pk_table_from_CAMB(double *scalef, double *grow1, double *grow2, double
       Om = OmegaMatter(z);
       grow1[i + j * NBINS] = pow(10., gsl_spline2d_eval(AnotherSpline, 1. / (1. + z), logk_req, xacc, yacc));
       grow2[i + j * NBINS] = 3. / 7. * pow(grow1[i + j * NBINS], 2.0) * pow(Om, -1. / 143.);
-      grow31[i + j * NBINS] = grow1[i] * grow1[i] * grow1[i] * pow(Om, -4. / 275.) / 9.;
-      grow32[i + j * NBINS] = grow1[i] * grow1[i] * grow1[i] * pow(Om, -268. / 17875.) * 5. / 42.;
+      grow31[i + j * NBINS] = grow1[i + j * NBINS] * grow1[i + j * NBINS] * grow1[i + j * NBINS] * pow(Om, -4. / 275.) / 9.;
+      grow32[i + j * NBINS] = grow1[i + j * NBINS] * grow1[i + j * NBINS] * grow1[i + j * NBINS] * pow(Om, -268. / 17875.) * 5. / 42.;
     }
 
   Today = i - 1;

@@ -37,7 +37,7 @@
 #ifndef SCALE_DEPENDENT
 #define NkBINS 1
 #else
-#define NkBINS 10
+#define NkBINS 12
 #define LOGKMIN ((double)-3.0)
 #define DELTALOGK ((double)0.5)
 #endif
