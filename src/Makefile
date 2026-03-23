@@ -2,133 +2,123 @@
 # *                        PINOCCHIO  V5.1                        *
 # *  (PINpointing Orbit-Crossing Collapsed HIerarchical Objects)  *
 # *****************************************************************
-# 
+#
 # This code was written by
-# Pierluigi Monaco, Tom Theuns, Giuliano Taffoni, Marius Lepinzan, 
+# Pierluigi Monaco, Tom Theuns, Giuliano Taffoni, Marius Lepinzan,
 # Chiara Moretti, Luca Tornatore, David Goz, Tiago Castro
 # Copyright (C) 2025
-# 
+#
 # github: https://github.com/pigimonaco/Pinocchio
 # web page: http://adlibitum.oats.inaf.it/monaco/pinocchio.html
-# 
+#
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation; either version 2 of the License, or
 # (at your option) any later version.
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 
-# Directory settings #
+# =============================================================
+#  User Configuration
+# =============================================================
 
-RUNDIR = ./
+RUNDIR  = ./
+EXEC    = pinocchio.x
+DEBUG   = NO
+OMP     = YES
+SYSTYPE ?= "LeonardoDCGP"
 
-# Executable name #
 
-EXEC = pinocchio.x
-
-# Compilation options #
-
-DEBUG = NO
-OMP   = YES
-
-########## Feature toggles (preprocessor definitions) ##########
+# =============================================================
+#  Feature Toggles  (preprocessor definitions)
+# =============================================================
 #
-# How to use:
-# - Edit the OPTIONS += -D<FLAG> lines below to enable/disable features.
-# - These options enable/disable code paths at compile time. Choose what you need
-#   for your run to reduce binary size and keep hot loops lean.
-# - The default profile here matches a typical Past Light-Cone (PLC) + Mass Maps
-#   run with snapshots and FITS output.
+# Uncomment / comment the OPTIONS lines below to enable / disable
+# compile-time features.  Only enabled flags produce code in the
+# binary.
 #
-# LPT order (displacement field accuracy)
-# -DTWO_LPT                    Include second-order LPT term.
-# -DTHREE_LPT                  Include third-order LPT term (adds cost).
+# --- LPT order -----------------------------------------------------------
+#  -DTWO_LPT              Second-order Lagrangian perturbation theory.
+#  -DTHREE_LPT            Third-order LPT (adds computational cost).
 OPTIONS += -DTWO_LPT
 OPTIONS += -DTHREE_LPT
 
-# PLC + Mass Maps pipeline
-# -DPLC                        Enable past light-cone geometry and basis vectors.
-# -DMASS_MAPS                  Build per-segment HEALPix maps counting PLC entries.
-# -DHAVE_CFITSIO               Write FITS files (requires CFITSIO installed).
-# -DMASS_MAPS_FILTER_UNCOLLAPSED  Keep only entries with Z_PLC > Z_ACC (requires SNAPSHOT).
-# -DMASS_MAPS_THREAD_ACCUM     Use per-thread HEALPix accumulators to reduce atomics.
-# -DDISP_HISTOGRAM             Optional: write displacement magnitude histograms (debug/QA).
-OPTIONS += -DPLC
-OPTIONS += -DMASS_MAPS
-OPTIONS += -DHAVE_CFITSIO
-OPTIONS += -DMASS_MAPS_FILTER_UNCOLLAPSED  # Z_PLC > Z_ACC (requires SNAPSHOT)
-#OPTIONS += -DDISP_HISTOGRAM               # Enable only when you need displacement QA
-OPTIONS += -DMASS_MAPS_THREAD_ACCUM
-
-# Mass-maps diagnostics (compile-time)
-# -DMASS_MAPS_CAP_DIAG=1        Enable cap prefix diagnostics (off by default)
-#   Tracks max accepted/missed angles and prefix misses; useful for aperture QA.
-# OPTIONS += -DMASS_MAPS_CAP_DIAG=1
-
-# Triaxial collapse model (choose one)
-# -DELL_CLASSIC                Classic ellipsoidal collapse model (default).
-# -DELL_SNG                    Spherical-no-gravity approximation.
-# -DTABULATED_CT               Use tabulated collapse times from file.
+# --- Collapse model (choose one) ----------------------------------------
+#  -DELL_CLASSIC           Classic ellipsoidal collapse (default).
+#  -DELL_SNG               Spherical-no-gravity approximation.
+#  -DTABULATED_CT          Use tabulated collapse times from file.
 OPTIONS += -DELL_CLASSIC
 
-# Group building and fragmentation
-# -DCLASSIC_FRAGMENTATION       Use classic fragmentation instead of default.
+# --- Output and products ------------------------------------------------
+#  -DSNAPSHOT              Populate products[] (z_acc, group_ID, etc.).
+#                          Required by MASS_MAPS_FILTER_UNCOLLAPSED.
+#  -DLONGIDS               Use 64-bit particle IDs.
+#  -DLIGHT_OUTPUT          Reduce output footprint.
+#  -DDOUBLE_PRECISION_PRODUCTS  Store products in double precision.
+OPTIONS += -DLONGIDS
 
-# Output and products
-# -DSNAPSHOT                   Populate products[] (z_acc, group_ID, displacements, etc.).
-#                              Required by MASS_MAPS_FILTER_UNCOLLAPSED.
-# -DLIGHT_OUTPUT               Reduce output footprint.
-# -DLONGIDS                    Use 64-bit particle IDs.
-# -DDOUBLE_PRECISION_PRODUCTS  Store products in double precision.
-OPTIONS += -DSNAPSHOT
+# --- Past Light-Cone & Mass Maps ----------------------------------------
+#  -DPLC                   Enable past light-cone geometry.
+#  -DMASS_MAPS             Build per-segment HEALPix maps.
+#  -DHAVE_CFITSIO          Write FITS files (requires CFITSIO).
+#  -DMASS_MAPS_FILTER_UNCOLLAPSED  Keep only Z_PLC > Z_ACC entries.
+#  -DMASS_MAPS_THREAD_ACCUM       Per-thread HEALPix accumulators.
+#  -DMASS_MAPS_CAP_DIAG    Cap prefix diagnostics (aperture QA).
+#  -DMASS_MAPS_MATCH_DIAG  Extra cross-matching diagnostics (debug).
+#  -DDISP_HISTOGRAM        Displacement magnitude histograms (QA).
 
-# Beyond ΛCDM and solver options
-# Neutrinos and scale-dependent growth:
-# -DSCALE_DEPENDENT            Enable k-dependent growth (FFT per segment).
-# -DREAD_PK_TABLE              Read external P(k) table (implies scale dependence).
-#
-# Displacement engine:
-# -DRECOMPUTE_DISPLACEMENTS    Maintain prev/curr segment fields (needed for PLC crossings).
-# -DREAD_HUBBLE_TABLE          Read H(z) table for precise distances.
-# -DMASS_MAPS_MATCH_DIAG       Extra cross-matching diagnostics (debug).
-# -DUSE_DISTRIBUTE_ALLTOALL    Use all-to-all variant for forward product redistribution.
-OPTIONS += -DMASS_MAPS_MATCH_DIAG
+# --- Scale-dependent growth & beyond LCDM --------------------------------
+#  -DSCALE_DEPENDENT       Enable k-dependent growth (FFT per segment).
+#  -DREAD_PK_TABLE         Read external P(k) table.
+#  -DRECOMPUTE_DISPLACEMENTS  Maintain prev/curr segment fields.
+#  -DREAD_HUBBLE_TABLE     Read H(z) table for precise distances.
+OPTIONS += -DSCALE_DEPENDENT
 OPTIONS += -DREAD_PK_TABLE
-OPTIONS += -DUSE_DISTRIBUTE_ALLTOALL
-
-# f(R) gravity:
-# -DMOD_GRAV_FR                Enable modified gravity model (f(R)).
-# -DFR0=1.e-8                  Example FR parameter value.
 OPTIONS += -DRECOMPUTE_DISPLACEMENTS
 OPTIONS += -DREAD_HUBBLE_TABLE
 
+# --- f(R) modified gravity -----------------------------------------------
+#  -DMOD_GRAV_FR           Enable f(R) modified gravity.
+#  -DFR0=1.e-8             FR parameter value.
 
-# Other options
-# -DWHITENOISE                  White-noise ICs.
-# -DNORADIATION                 Neglect radiation component.
+# --- Fragmentation -------------------------------------------------------
+#  -DCLASSIC_FRAGMENTATION  Use classic fragmentation algorithm.
+#OPTIONS += -DCLASSIC_FRAGMENTATION
 
-########## Preprocessor Definitions end ########## 
+# --- Distribution --------------------------------------------------------
+#  -DUSE_DISTRIBUTE_ALLTOALL  Use MPI_Alltoall-based distribution.
+OPTIONS += -DUSE_DISTRIBUTE_ALLTOALL
 
-# OpenMP Configuration #
+# --- Other ---------------------------------------------------------------
+#  -DWHITENOISE            White-noise initial conditions.
+#  -DNORADIATION           Neglect radiation component.
+
+
+# =============================================================
+#  OpenMP Configuration
+# =============================================================
 
 ifeq ($(OMP), YES)
-OPTIONS += -DUSE_FFT_THREADS
-OMP_FLAG = -fopenmp
-OMP_FFTW = -lfftw3_omp -lfftw3_threads
+OPTIONS  += -DUSE_FFT_THREADS
+OMP_FLAG  = -fopenmp
+OMP_FFTW  = -lfftw3_omp -lfftw3_threads
 else
-OMP_FLAG =
-OMP_FFTW =
+OMP_FLAG  =
+OMP_FFTW  =
 endif
 
-############## Mass Maps Library ####################
+
+# =============================================================
+#  External Library Paths  (defaults, overridden per system)
+# =============================================================
 
 HEALPIX_ROOT ?= /usr
 CFITSIO_ROOT ?= /usr
@@ -139,71 +129,66 @@ HEALPIX_LIBR = -L$(HEALPIX_ROOT)/lib -lchealpix
 CFITSIO_INCL = -I$(CFITSIO_ROOT)/include
 CFITSIO_LIBR = -L$(CFITSIO_ROOT)/lib -lcfitsio
 
-########## System-specific Configuration ############
 
-SYSTYPE ?= "mylaptop"
+# =============================================================
+#  System-Specific Configuration
+# =============================================================
+#
+# Set SYSTYPE above (or via the environment) to match your platform.
+# Each block defines CC, CFLAGS, and library paths.
 
-################### mylaptop ####################
+# ----------------------- mylaptop -------------------------
 
 ifeq ($(SYSTYPE),"mylaptop")
-CC          =  mpicc
+CC          = mpicc
 CDEBUG      = -ggdb3 -Wall $(OMP_FLAG)
 COPTIMIZED  = -O3 -Wno-unused-result $(OMP_FLAG)
 FFTW_LIBR   = -L/usr/lib/ -lfftw3_mpi -lfftw3 $(OMP_FFTW)
 FFTW_INCL   = -I/usr/include
 PFFT_LIBR   = -L$(HOME)/lib -lpfft
 PFFT_INCL   = -I$(HOME)/include
-
 MPI_LIBR    =
 MPI_INCL    =
 GSL_LIBR    = -L$(HOME)/lib -lgsl -lgslcblas -lm
 GSL_INCL    = -I$(HOME)/include/gsl
-
-HEALPIX_INCL = -I$(HEALPIX_ROOT)/include
-HEALPIX_LIBR = -L$(HEALPIX_ROOT)/lib -lchealpix
-
-CFITSIO_INCL = -I$(CFITSIO_ROOT)/include
-CFITSIO_LIBR = -L$(CFITSIO_ROOT)/lib -lcfitsio
-
 endif
 
-###################### BASE ######################
+# ----------------------- base -----------------------------
 
 ifeq ($(SYSTYPE),"base")
-CC          =  mpicc
+CC          = mpicc
 CDEBUG      = -ggdb3 -Wall $(OMP_FLAG)
 COPTIMIZED  = -O3 -Wno-unused-result $(OMP_FLAG)
 FFTW_LIBR   = -L$(FFTW_LIB) -lfftw3_mpi -lfftw3 $(OMP_FFTW)
 FFTW_INCL   = -I$(HOME)/include
 PFFT_LIBR   = -L$(HOME)/lib -lpfft
 PFFT_INCL   = -I$(HOME)/include
-
 MPI_LIBR    =
 MPI_INCL    =
 GSL_LIBR    = -L$(HOME)/lib -lgsl -lgslcblas -lm
 GSL_INCL    = -I$(HOME)/include/gsl
 endif
 
-###################### MARCONI ######################
+# ----------------------- Marconi100 -----------------------
 
 ifeq ($(SYSTYPE),"Marconi100")
-CC          =  mpicc
+CC          = mpicc
 CDEBUG      = -ggdb3 -Wall $(OMP_FLAG)
-COPTIMIZED  = -O2 -Wno-unused-result  $(OMP_FLAG)
+COPTIMIZED  = -O2 -Wno-unused-result $(OMP_FLAG)
 FFTW_LIBR   = -L$(HOME)/lib -lfftw3_mpi -lfftw3 $(OMP_FFTW)
 FFTW_INCL   = -I$(HOME)/include
 PFFT_LIBR   = -lpfft
-PFFT_INCL   = 
+PFFT_INCL   =
 MPI_LIBR    = -L$(SMPI_ROOT)/lib -lmpi_ibm
 MPI_INCL    = -I$(SMPI_ROOT)/include
 GSL_LIBR    = -L$(GSL_LIB) -lgsl -lgslcblas -lm
 GSL_INCL    = -I$(GSL_INC)
 endif
 
-###################### PLEIADI ######################
+# ----------------------- pleiadi --------------------------
 
 ifeq ($(SYSTYPE),"pleiadi")
-CC          =  mpicc
+CC          = mpicc
 CDEBUG      = -g -Wall $(OMP_FLAG)
 COPTIMIZED  = -O3 -Wno-unused-result $(OMP_FLAG)
 FFTW_LIBR   = -L/opt/cluster/spack/opt/spack/linux-centos7-broadwell/gcc-11.2.0/fftw-3.3.10-bap3ootbcmiypnmo7rouk57jbdhfjuty/lib -lfftw3_mpi -lfftw3 $(OMP_FFTW)
@@ -216,11 +201,10 @@ GSL_LIBR    = -L/opt/cluster/spack/opt/spack/linux-centos7-broadwell/gcc-11.2.0/
 GSL_INCL    = -I/opt/cluster/spack/opt/spack/linux-centos7-broadwell/gcc-11.2.0/gsl-2.7.1-uehbowahpvubxundtx3cz4a4a5sdwzun/include
 endif
 
+# ----------------------- LeonardoBoost --------------------
 
-###################### LEONARDO ######################
-ifeq ($(SYSTYPE), "LeonardoBoost")
-
-CC          =  nvc
+ifeq ($(SYSTYPE),"LeonardoBoost")
+CC          = nvc
 CDEBUG      = -g -O0 -Minfo=all -v -Mneginfo $(OMP_FLAG)
 COPTIMIZED  = -O3 -fast -Minfo=all -v -Mneginfo $(OMP_FLAG)
 
@@ -241,16 +225,15 @@ PFFT        = $(LIBDIR)/pfft/pfft
 PFFT_LIBR   = -L$(PFFT)/lib -lpfft
 PFFT_INCL   = -I$(PFFT)/include
 
-
 PMT         = /leonardo_scratch/fast/CNHPC_1498509/lib/pmt/local
 PMT_LIBR    = -L$(PMT)/lib64 -lpmt
 PMT_INCL    = -I$(PMT)/include
-
 endif
 
-ifeq ($(SYSTYPE), "LeonardoDCGP")
+# ----------------------- LeonardoDCGP --------------------
 
-CC          =  mpicc
+ifeq ($(SYSTYPE),"LeonardoDCGP")
+CC          = mpicc
 CDEBUG      = -ggdb3 -Wall $(OMP_FLAG)
 COPTIMIZED  = -O3 -Wno-unused-result $(OMP_FLAG)
 
@@ -272,76 +255,63 @@ HEALPIX_LIBR = -L$(HEALPIX_ROOT)/lib -lchealpix
 
 CFITSIO_INCL = -I$(CFITSIO_ROOT)/include
 CFITSIO_LIBR = -L$(CFITSIO_ROOT)/lib -lcfitsio
-
 endif
 
-########## System-specific Configuration end ########## 
 
-# Include paths for libraries #
+# =============================================================
+#  Includes, Libraries & Compiler Options
+# =============================================================
 
-INC =  $(PFFT_INCL) $(FFTW_INCL) $(MPI_INCL) $(GSL_INCL) 
-
-# Library flags #
-
-###############################################################
-# HEALPix / CFITSIO configuration (override from environment)
-###############################################################
-
-# Append their include paths
+INC  = $(PFFT_INCL) $(FFTW_INCL) $(MPI_INCL) $(GSL_INCL)
 INC += $(HEALPIX_INCL) $(CFITSIO_INCL)
 
-# Append their libraries (placed after math deps)
-LIB =  -lm $(PFFT_LIBR) $(FFTW_LIBR) $(MPI_LIBR) $(GSL_LIBR) $(CFITSIO_LIBR) $(HEALPIX_LIBR)
-
-# Compiler options : choose from CDEBUG or COPTIMIZED #
+LIB  = -lm $(PFFT_LIBR) $(FFTW_LIBR) $(MPI_LIBR) $(GSL_LIBR)
+LIB += $(CFITSIO_LIBR) $(HEALPIX_LIBR)
 
 ifeq ($(DEBUG), YES)
 COPTS = $(CDEBUG)
 else
 COPTS = $(COPTIMIZED)
 endif
-# Source files #
+
+
+# =============================================================
+#  Source Files
+# =============================================================
 
 OBJECTS = fmax.o variables.o initialization.o collapse_times.o fmax-pfft.o GenIC.o \
 	ReadParamfile.o allocations.o LPT.o distribute.o \
 	fragment.o build_groups.o write_halos.o write_snapshot.o write_mass_maps.o cosmo.o
 
-# Main targets and rules
+
+# =============================================================
+#  Build Targets
+# =============================================================
 
 pinocchio: $(OBJECTS) pinocchio.o Makefile
 	$(CC) $(INC) $(COPTS) -o $(RUNDIR)$(EXEC) pinocchio.o $(OBJECTS) $(LIB)
 
 run_planner: $(OBJECTS) run_planner.o Makefile
-	$(CC) $(INC) $(COPTS) -o run_planner run_planner.o $(OBJECTS) $(LIB)	
-
-# Generic rule for compiling source files #
+	$(CC) $(INC) $(COPTS) -o run_planner run_planner.o $(OBJECTS) $(LIB)
 
 %.o: %.c Makefile pinocchio.h def_splines.h
 	$(CC) $(INC) $(COPTS) $(OPTIONS) -c $<
 
-# Clean target #
-
 clean:
-	\rm -f *.o *~ $(EXEC) run_planner
+	rm -f *.o *~ $(EXEC) run_planner
 
-###############################################################
-# Documentation
-###############################################################
-# Generates HTML docs from in-source Doxygen comments.
+
+# =============================================================
+#  Documentation  (requires doxygen)
+# =============================================================
 #
-# Usage:
-#   make docs            # builds HTML docs under ../docs/build/html
-#   make docs-clean      # removes generated docs
-#
-# Requirements:
-#   - doxygen installed and available on PATH
-#   - config: ../docs/Doxyfile (provided in repo)
+#   make docs         – build HTML docs under ../docs/build/html
+#   make docs-clean   – remove generated docs
 
 .PHONY: docs docs-clean
 
 DOXYGEN ?= doxygen
 DOCDIR  ?= ../docs
-DOXYCFG ?= $(DOCDIR)/Doxyfile
 
 docs:
 	@command -v $(DOXYGEN) >/dev/null 2>&1 || { \

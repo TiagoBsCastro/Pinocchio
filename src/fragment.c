@@ -118,7 +118,12 @@ void set_fragment_parameters(int order)
 static int index_compare_F(const void *a, const void *b)
 {
   if (frag[*((int *)a)].Fmax == frag[*((int *)b)].Fmax)
-    return 0;
+    /* Deterministic tiebreaker: use unique Lagrangian position so that
+       repeated calls to sort_and_organize (after redistribute) always
+       produce the same particle ordering.  Without this, qsort is free
+       to place tied-Fmax particles in any order, which changes across
+       redistributions and silently corrupts group_ID / linking_list. */
+    return frag_pos[*((int *)a)] - frag_pos[*((int *)b)];
   else if (frag[*((int *)a)].Fmax > frag[*((int *)b)].Fmax)
     return -1;
   else
@@ -487,13 +492,41 @@ int fragment()
 
           if (recompute_group_velocities())
             return 1;
+
+          dprintf(VDIAG, 0, "[%s] DIAG segment %d: Nstored=%u after redistribute\n",
+                  fdate(), mysegment, subbox.Nstored);
         }
-#endif
+#endif /* RECOMPUTE_DISPLACEMENTS */
 
         tmp = MPI_Wtime();
 
         if (build_groups(Npeaks, ScaleDep.z[mysegment], (mysegment == 0)))
           return 1;
+
+        /* DIAGNOSTIC: count halos at each segment end */
+        if (internal.verbose_level >= VDIAG)
+        {
+          int diag_ngroups = 0, diag_ngood = 0, diag_nabove = 0;
+          unsigned long long diag_totmass = 0;
+          for (int ig = FILAMENT + 1; ig <= ngroups; ig++)
+            if (groups[ig].point >= 0)
+            {
+              diag_ngroups++;
+              diag_totmass += groups[ig].Mass;
+              if (groups[ig].good)
+              {
+                diag_ngood++;
+                if (groups[ig].Mass >= params.MinHaloMass)
+                  diag_nabove++;
+              }
+            }
+          unsigned long long diag_buf[4] = {diag_ngroups, diag_ngood, diag_nabove, diag_totmass};
+          unsigned long long diag_sum[4];
+          MPI_Reduce(diag_buf, diag_sum, 4, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+          dprintf(VDIAG, 0, "[%s] DIAG segment %d (z=%.4f): ngroups=%llu good=%llu above_min=%llu totmass=%llu\n",
+                  fdate(), mysegment, ScaleDep.z[mysegment],
+                  diag_sum[0], diag_sum[1], diag_sum[2], diag_sum[3]);
+        }
 
 #if defined(SNAPSHOT) && defined(MASS_MAPS)
         /* Ensure frag[].group_ID reflects the current halo membership
@@ -930,9 +963,11 @@ int recompute_group_velocities()
 {
   /* Recompute average displacements of group velocities */
   int next, npart, i, ia;
+  int diag_ngroups = 0, diag_bad_walks = 0;
   for (i = FILAMENT + 1; i <= ngroups; i++)
     if (groups[i].point >= 0)
     {
+      diag_ngroups++;
       for (ia = 0; ia < 3; ia++)
       {
         groups[i].Vel_prev[ia] = groups[i].Vel[ia] = 0;
@@ -948,6 +983,15 @@ int recompute_group_velocities()
       next = groups[i].point;
       for (npart = 0; npart < groups[i].Mass; npart++)
       {
+        if (next < 0 || next >= (int)subbox.Nstored)
+        {
+          if (!diag_bad_walks)
+            printf("ERROR on Task %d: recompute_group_velocities group %d: "
+                   "linking_list walk out of bounds at step %d/%d, next=%d, Nstored=%u\n",
+                   ThisTask, i, npart, groups[i].Mass, next, subbox.Nstored);
+          diag_bad_walks++;
+          break;
+        }
         for (ia = 0; ia < 3; ia++)
         {
           groups[i].Vel[ia] += frag[next].Vel[ia];
@@ -981,6 +1025,16 @@ int recompute_group_velocities()
 #endif
       }
     }
+
+  if (diag_bad_walks)
+    printf("ERROR on Task %d: %d groups had linking_list walk issues\n",
+           ThisTask, diag_bad_walks);
+
+  int diag_bad_total = 0;
+  MPI_Reduce(&diag_bad_walks, &diag_bad_total, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+  if (!ThisTask)
+    printf("[%s] DIAG recompute_group_velocities: %d groups processed, %d bad walks\n",
+           fdate(), diag_ngroups, diag_bad_total);
 
   return 0;
 }
