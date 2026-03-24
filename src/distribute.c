@@ -271,7 +271,7 @@ int distribute_alltoall(void)
   MPI_Datatype dist_data_type = MPI_DATATYPE_NULL;
   int dtype_committed = 0;
 
-#ifdef NUMA_AWARE_DISTRIBUTE
+#ifdef NODE_AWARE_DISTRIBUTE
   int *is_local = NULL; /* 1 if peer is on the same node, 0 otherwise */
 #endif
 
@@ -509,7 +509,7 @@ int distribute_alltoall(void)
   MPI_Type_commit(&dist_data_type);
   dtype_committed = 1;
 
-#ifdef NUMA_AWARE_DISTRIBUTE
+#ifdef NODE_AWARE_DISTRIBUTE
   /* ---- Discover which peers share the same node ---- */
   {
     MPI_Comm node_comm;
@@ -517,9 +517,8 @@ int distribute_alltoall(void)
                         MPI_INFO_NULL, &node_comm);
 
     /* Build mapping: node_comm rank -> world rank for every peer on this node */
-    int node_size, node_rank;
+    int node_size;
     MPI_Comm_size(node_comm, &node_size);
-    MPI_Comm_rank(node_comm, &node_rank);
 
     /* Translate node_comm ranks to MPI_COMM_WORLD ranks */
     MPI_Group world_group, node_group;
@@ -553,7 +552,7 @@ int distribute_alltoall(void)
     int num_local = node_size - 1; /* excluding self */
     int num_remote = NTasks - node_size;
     if (!ThisTask)
-      printf("  distribute_alltoall NUMA: %d local peers, %d remote peers per task\n",
+      printf("  distribute_alltoall node-aware: %d local peers, %d remote peers per task\n",
              num_local, num_remote);
 
     free(node_ranks_in);
@@ -562,7 +561,7 @@ int distribute_alltoall(void)
     MPI_Group_free(&world_group);
     MPI_Comm_free(&node_comm);
   }
-#endif /* NUMA_AWARE_DISTRIBUTE */
+#endif /* NODE_AWARE_DISTRIBUTE */
 
 #ifndef MULTILAYER_DISTRIBUTE
   /* ---- Allocate chunk buffers ---- */
@@ -584,14 +583,14 @@ int distribute_alltoall(void)
       if ((1 << log_ntask) >= NTasks)
         break;
 
-#ifdef NUMA_AWARE_DISTRIBUTE
+#ifdef NODE_AWARE_DISTRIBUTE
     /* Two passes: pass 0 = intra-node only, pass 1 = inter-node only */
-    for (int numa_pass = 0; numa_pass < 2; numa_pass++)
+    for (int node_pass = 0; node_pass < 2; node_pass++)
     {
-      if (!ThisTask && numa_pass == 0)
-        printf("  distribute_alltoall NUMA: intra-node pass\n");
-      else if (!ThisTask && numa_pass == 1)
-        printf("  distribute_alltoall NUMA: inter-node pass\n");
+      if (!ThisTask && node_pass == 0)
+        printf("  distribute_alltoall node-aware: intra-node pass\n");
+      else if (!ThisTask && node_pass == 1)
+        printf("  distribute_alltoall node-aware: inter-node pass\n");
 #endif
 
       for (int bit = 1; bit < (1 << log_ntask); bit++)
@@ -600,11 +599,11 @@ int distribute_alltoall(void)
         if (partner >= NTasks)
           continue;
 
-#ifdef NUMA_AWARE_DISTRIBUTE
-        /* Skip partner if it doesn't belong to this NUMA pass */
-        if (numa_pass == 0 && !is_local[partner])
+#ifdef NODE_AWARE_DISTRIBUTE
+        /* Skip partner if it doesn't belong to this node-aware pass */
+        if (node_pass == 0 && !is_local[partner])
           continue;
-        if (numa_pass == 1 && is_local[partner])
+        if (node_pass == 1 && is_local[partner])
           continue;
 #endif
 
@@ -694,8 +693,12 @@ int distribute_alltoall(void)
         }
       }
 
-#ifdef NUMA_AWARE_DISTRIBUTE
-    } /* end numa_pass loop */
+#ifdef NODE_AWARE_DISTRIBUTE
+      /* Strict phase boundary: no inter-node traffic begins until all
+         intra-node exchanges are complete everywhere. */
+      if (node_pass == 0)
+        MPI_Barrier(MPI_COMM_WORLD);
+    } /* end node_pass loop */
 #endif
   }
 
@@ -731,14 +734,14 @@ int distribute_alltoall(void)
       if ((1 << log_ntask) >= NTasks)
         break;
 
-#ifdef NUMA_AWARE_DISTRIBUTE
+#ifdef NODE_AWARE_DISTRIBUTE
     /* Two passes: pass 0 = intra-node only, pass 1 = inter-node only */
-    for (int numa_pass = 0; numa_pass < 2; numa_pass++)
+    for (int node_pass = 0; node_pass < 2; node_pass++)
     {
-      if (!ThisTask && numa_pass == 0)
-        printf("  distribute_alltoall staggered NUMA: intra-node pass\n");
-      else if (!ThisTask && numa_pass == 1)
-        printf("  distribute_alltoall staggered NUMA: inter-node pass\n");
+      if (!ThisTask && node_pass == 0)
+        printf("  distribute_alltoall staggered node-aware: intra-node pass\n");
+      else if (!ThisTask && node_pass == 1)
+        printf("  distribute_alltoall staggered node-aware: inter-node pass\n");
 #endif
 
       for (int bit = 1; bit < (1 << log_ntask); bit++)
@@ -746,15 +749,23 @@ int distribute_alltoall(void)
         int partner = ThisTask ^ bit;
 
         /* Determine how many active pairs exist for this bit value.
-           A pair (A, B) with A < B is active when both A < NTasks and
-           B < NTasks.  Each active pair gets a sequential pair_id based
-           on the smaller rank in the pair. */
+           When NODE_AWARE_DISTRIBUTE is active, count only pairs that
+           belong to the current pass (local or remote) so that sub-round
+           numbering is dense and we avoid empty barrier rounds. */
         int num_active_pairs = 0;
         for (int t = 0; t < NTasks; t++)
         {
           int p = t ^ bit;
           if (p < NTasks && t < p)
+          {
+#ifdef NODE_AWARE_DISTRIBUTE
+            if (node_pass == 0 && !is_local[p])
+              continue;
+            if (node_pass == 1 && is_local[p])
+              continue;
+#endif
             num_active_pairs++;
+          }
         }
 
         int num_sub_rounds = (num_active_pairs + MAX_CONCURRENT_PAIRS - 1) / MAX_CONCURRENT_PAIRS;
@@ -763,31 +774,41 @@ int distribute_alltoall(void)
         int my_sub_round = -1;
         if (partner < NTasks)
         {
-          int my_pair_id = 0;
-          int low = (ThisTask < partner) ? ThisTask : partner;
-          for (int t = 0; t < low; t++)
+#ifdef NODE_AWARE_DISTRIBUTE
+          /* Check if this partner belongs to the current pass at all */
+          int partner_in_pass = 1;
+          if (node_pass == 0 && !is_local[partner])
+            partner_in_pass = 0;
+          if (node_pass == 1 && is_local[partner])
+            partner_in_pass = 0;
+          if (partner_in_pass)
           {
-            int p = t ^ bit;
-            if (p < NTasks && t < p)
-              my_pair_id++;
+#endif
+            int my_pair_id = 0;
+            int low = (ThisTask < partner) ? ThisTask : partner;
+            for (int t = 0; t < low; t++)
+            {
+              int p = t ^ bit;
+              if (p < NTasks && t < p)
+              {
+#ifdef NODE_AWARE_DISTRIBUTE
+                if (node_pass == 0 && !is_local[p])
+                  continue;
+                if (node_pass == 1 && is_local[p])
+                  continue;
+#endif
+                my_pair_id++;
+              }
+            }
+            my_sub_round = my_pair_id / MAX_CONCURRENT_PAIRS;
+#ifdef NODE_AWARE_DISTRIBUTE
           }
-          my_sub_round = my_pair_id / MAX_CONCURRENT_PAIRS;
+#endif
         }
 
         for (int sr = 0; sr < num_sub_rounds; sr++)
         {
           int do_exchange = (sr == my_sub_round && partner < NTasks);
-#ifdef NUMA_AWARE_DISTRIBUTE
-          /* NUMA skip must be checked HERE (not at the bit-loop level)
-             to ensure all tasks still participate in the barrier below. */
-          if (do_exchange)
-          {
-            if (numa_pass == 0 && !is_local[partner])
-              do_exchange = 0;
-            if (numa_pass == 1 && is_local[partner])
-              do_exchange = 0;
-          }
-#endif
           if (do_exchange)
           {
             /* This pair is active in this sub-round */
@@ -883,8 +904,12 @@ int distribute_alltoall(void)
         }
       }
 
-#ifdef NUMA_AWARE_DISTRIBUTE
-    } /* end numa_pass loop */
+#ifdef NODE_AWARE_DISTRIBUTE
+      /* Strict phase boundary: no inter-node traffic begins until all
+         intra-node exchanges are complete everywhere. */
+      if (node_pass == 0)
+        MPI_Barrier(MPI_COMM_WORLD);
+    } /* end node_pass loop */
 #endif
   }
 
@@ -958,7 +983,7 @@ int distribute_alltoall(void)
   free(bm_recvbuf);
   free(bm_rdispls);
   free(plan);
-#ifdef NUMA_AWARE_DISTRIBUTE
+#ifdef NODE_AWARE_DISTRIBUTE
   free(is_local);
 #endif
 
@@ -982,7 +1007,7 @@ fail:
   free(plan);
   free(all_subboxes);
   free(all_fftboxes);
-#ifdef NUMA_AWARE_DISTRIBUTE
+#ifdef NODE_AWARE_DISTRIBUTE
   free(is_local);
 #endif
   return 1;
