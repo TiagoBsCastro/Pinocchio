@@ -235,6 +235,102 @@ static inline unsigned int dist_box_size(const int *box)
   return (unsigned int)box[3] * (unsigned int)box[4] * (unsigned int)box[5];
 }
 
+/* ---- Helper: exchange payload with one peer ----
+   Performs a two-phase blocking send/recv with the given partner using
+   the cached plan, bitmaps, and chunk buffers.  Called from both the
+   default and staggered hypercube paths. */
+#ifndef CLASSIC_FRAGMENTATION
+static void peer_exchange(int partner, int send_first,
+                          dist_peer_plan *plan,
+                          unsigned int *bm_recvbuf, int *bm_rdispls,
+                          dist_data *send_chunk, dist_data *recv_chunk,
+                          MPI_Datatype dist_data_type)
+{
+  for (int phase = 0; phase < 2; phase++)
+  {
+    int do_send = (phase == 0) ? send_first : !send_first;
+
+    if (do_send)
+    {
+      /* ---- SEND to partner ---- */
+      if (plan[partner].sendcount == 0)
+        continue;
+
+      unsigned int *bm_ptr = bm_recvbuf + bm_rdispls[partner];
+      int bufcount = 0;
+
+      for (int box = 0; box < plan[partner].nsend_int; box++)
+      {
+        int *b = plan[partner].send_int + 6 * box;
+        unsigned int size = dist_box_size(b);
+        unsigned int mapl = distmap_length(size);
+
+        for (unsigned int i = 0; i < size; i++)
+        {
+          if (!get_distmap_bit(bm_ptr, i))
+            continue;
+
+          unsigned int pfft = fft_space_index(i, b);
+          unsigned int ip, jp, kp;
+          int g[3];
+
+          INDEX_TO_COORD(i, ip, jp, kp, b + 3);
+          g[_x_] = (ip + b[_x_]) % MyGrids[0].GSglobal[_x_];
+          g[_y_] = (jp + b[_y_]) % MyGrids[0].GSglobal[_y_];
+          g[_z_] = (kp + b[_z_]) % MyGrids[0].GSglobal[_z_];
+
+          send_chunk[bufcount].pos =
+              COORD_TO_INDEX(g[_x_], g[_y_], g[_z_], MyGrids[0].GSglobal);
+          memcpy(&send_chunk[bufcount].prod, &products[pfft], sizeof(product_data));
+          bufcount++;
+
+          if (bufcount == BUFLEN)
+          {
+            MPI_Send(send_chunk, bufcount, dist_data_type, partner, 0, MPI_COMM_WORLD);
+            bufcount = 0;
+          }
+        }
+        bm_ptr += mapl;
+      }
+
+      if (bufcount > 0)
+        MPI_Send(send_chunk, bufcount, dist_data_type, partner, 0, MPI_COMM_WORLD);
+    }
+    else
+    {
+      /* ---- RECEIVE from partner ---- */
+      int received = 0;
+      int nrecv = plan[partner].recvcount;
+
+      while (received < nrecv)
+      {
+        int chunk = nrecv - received;
+        if (chunk > BUFLEN)
+          chunk = BUFLEN;
+
+        MPI_Recv(recv_chunk, chunk, dist_data_type, partner, 0,
+                 MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+        for (int ri = 0; ri < chunk; ri++)
+        {
+          int g[3], l[3];
+          INDEX_TO_COORD(recv_chunk[ri].pos,
+                         g[_x_], g[_y_], g[_z_], MyGrids[0].GSglobal);
+
+          l[_x_] = (g[_x_] - subbox.stabl[_x_] + MyGrids[0].GSglobal[_x_]) % MyGrids[0].GSglobal[_x_];
+          l[_y_] = (g[_y_] - subbox.stabl[_y_] + MyGrids[0].GSglobal[_y_]) % MyGrids[0].GSglobal[_y_];
+          l[_z_] = (g[_z_] - subbox.stabl[_z_] + MyGrids[0].GSglobal[_z_]) % MyGrids[0].GSglobal[_z_];
+
+          unsigned int spos = COORD_TO_INDEX(l[_x_], l[_y_], l[_z_], subbox.Lgwbl);
+          dist_append_frag(spos, &recv_chunk[ri].prod);
+        }
+        received += chunk;
+      }
+    }
+  }
+}
+#endif /* !CLASSIC_FRAGMENTATION */
+
 int distribute_alltoall(void)
 {
 #ifdef CLASSIC_FRAGMENTATION
@@ -592,89 +688,8 @@ int distribute_alltoall(void)
 #endif
 
         int send_first = (ThisTask < partner);
-
-        for (int phase = 0; phase < 2; phase++)
-        {
-          int do_send = (phase == 0) ? send_first : !send_first;
-
-          if (do_send)
-          {
-            /* ---- SEND to partner ---- */
-            if (plan[partner].sendcount == 0)
-              continue;
-
-            unsigned int *bm_ptr = bm_recvbuf + bm_rdispls[partner];
-            int bufcount = 0;
-
-            for (int box = 0; box < plan[partner].nsend_int; box++)
-            {
-              int *b = plan[partner].send_int + 6 * box;
-              unsigned int size = dist_box_size(b);
-              unsigned int mapl = distmap_length(size);
-
-              for (unsigned int i = 0; i < size; i++)
-              {
-                if (!get_distmap_bit(bm_ptr, i))
-                  continue;
-
-                unsigned int pfft = fft_space_index(i, b);
-                unsigned int ip, jp, kp;
-                int g[3];
-
-                INDEX_TO_COORD(i, ip, jp, kp, b + 3);
-                g[_x_] = (ip + b[_x_]) % MyGrids[0].GSglobal[_x_];
-                g[_y_] = (jp + b[_y_]) % MyGrids[0].GSglobal[_y_];
-                g[_z_] = (kp + b[_z_]) % MyGrids[0].GSglobal[_z_];
-
-                send_chunk[bufcount].pos =
-                    COORD_TO_INDEX(g[_x_], g[_y_], g[_z_], MyGrids[0].GSglobal);
-                memcpy(&send_chunk[bufcount].prod, &products[pfft], sizeof(product_data));
-                bufcount++;
-
-                if (bufcount == BUFLEN)
-                {
-                  MPI_Send(send_chunk, bufcount, dist_data_type, partner, 0, MPI_COMM_WORLD);
-                  bufcount = 0;
-                }
-              }
-              bm_ptr += mapl;
-            }
-
-            if (bufcount > 0)
-              MPI_Send(send_chunk, bufcount, dist_data_type, partner, 0, MPI_COMM_WORLD);
-          }
-          else
-          {
-            /* ---- RECEIVE from partner ---- */
-            int received = 0;
-            int nrecv = plan[partner].recvcount;
-
-            while (received < nrecv)
-            {
-              int chunk = nrecv - received;
-              if (chunk > BUFLEN)
-                chunk = BUFLEN;
-
-              MPI_Recv(recv_chunk, chunk, dist_data_type, partner, 0,
-                       MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-              for (int ri = 0; ri < chunk; ri++)
-              {
-                int g[3], l[3];
-                INDEX_TO_COORD(recv_chunk[ri].pos,
-                               g[_x_], g[_y_], g[_z_], MyGrids[0].GSglobal);
-
-                l[_x_] = (g[_x_] - subbox.stabl[_x_] + MyGrids[0].GSglobal[_x_]) % MyGrids[0].GSglobal[_x_];
-                l[_y_] = (g[_y_] - subbox.stabl[_y_] + MyGrids[0].GSglobal[_y_]) % MyGrids[0].GSglobal[_y_];
-                l[_z_] = (g[_z_] - subbox.stabl[_z_] + MyGrids[0].GSglobal[_z_]) % MyGrids[0].GSglobal[_z_];
-
-                unsigned int spos = COORD_TO_INDEX(l[_x_], l[_y_], l[_z_], subbox.Lgwbl);
-                dist_append_frag(spos, &recv_chunk[ri].prod);
-              }
-              received += chunk;
-            }
-          }
-        }
+        peer_exchange(partner, send_first, plan, bm_recvbuf, bm_rdispls,
+                      send_chunk, recv_chunk, dist_data_type);
       }
 
 #ifdef NODE_AWARE_DISTRIBUTE
@@ -719,181 +734,111 @@ int distribute_alltoall(void)
         break;
 
 #ifdef NODE_AWARE_DISTRIBUTE
-    /* Two passes: pass 0 = intra-node only, pass 1 = inter-node only */
+    /* Two passes: pass 0 = intra-node (full concurrency),
+                   pass 1 = inter-node (staggered with MAX_CONCURRENT_PAIRS) */
     for (int node_pass = 0; node_pass < 2; node_pass++)
     {
-      if (!ThisTask && node_pass == 0)
-        printf("  distribute_alltoall staggered node-aware: intra-node pass\n");
-      else if (!ThisTask && node_pass == 1)
-        printf("  distribute_alltoall staggered node-aware: inter-node pass\n");
-#endif
-
-      for (int bit = 1; bit < (1 << log_ntask); bit++)
-      {
-        int partner = ThisTask ^ bit;
-
-        /* Determine how many active pairs exist for this bit value.
-           When NODE_AWARE_DISTRIBUTE is active, count only pairs that
-           belong to the current pass (local or remote) so that sub-round
-           numbering is dense and we avoid empty barrier rounds. */
-        int num_active_pairs = 0;
-        for (int t = 0; t < NTasks; t++)
-        {
-          int p = t ^ bit;
-          if (p < NTasks && t < p)
-          {
-#ifdef NODE_AWARE_DISTRIBUTE
-            /* Use global node_id[] so all ranks agree on the count */
-            if (node_pass == 0 && node_id[t] != node_id[p])
-              continue;
-            if (node_pass == 1 && node_id[t] == node_id[p])
-              continue;
-#endif
-            num_active_pairs++;
-          }
-        }
-
-        int num_sub_rounds = (num_active_pairs + MAX_CONCURRENT_PAIRS - 1) / MAX_CONCURRENT_PAIRS;
-
-        /* Compute which sub-round this task's pair belongs to */
-        int my_sub_round = -1;
-        if (partner < NTasks)
-        {
-#ifdef NODE_AWARE_DISTRIBUTE
-          /* Check if this partner belongs to the current pass at all */
-          int partner_in_pass = 1;
-          if (node_pass == 0 && node_id[ThisTask] != node_id[partner])
-            partner_in_pass = 0;
-          if (node_pass == 1 && node_id[ThisTask] == node_id[partner])
-            partner_in_pass = 0;
-          if (partner_in_pass)
-          {
-#endif
-            int my_pair_id = 0;
-            int low = (ThisTask < partner) ? ThisTask : partner;
-            for (int t = 0; t < low; t++)
-            {
-              int p = t ^ bit;
-              if (p < NTasks && t < p)
-              {
-#ifdef NODE_AWARE_DISTRIBUTE
-                if (node_pass == 0 && node_id[t] != node_id[p])
-                  continue;
-                if (node_pass == 1 && node_id[t] == node_id[p])
-                  continue;
-#endif
-                my_pair_id++;
-              }
-            }
-            my_sub_round = my_pair_id / MAX_CONCURRENT_PAIRS;
-#ifdef NODE_AWARE_DISTRIBUTE
-          }
-#endif
-        }
-
-        for (int sr = 0; sr < num_sub_rounds; sr++)
-        {
-          int do_exchange = (sr == my_sub_round && partner < NTasks);
-          if (do_exchange)
-          {
-            /* This pair is active in this sub-round */
-            int send_first = (ThisTask < partner);
-
-            for (int phase = 0; phase < 2; phase++)
-            {
-              int do_send = (phase == 0) ? send_first : !send_first;
-
-              if (do_send)
-              {
-                /* ---- SEND to partner ---- */
-                if (plan[partner].sendcount == 0)
-                  continue;
-
-                unsigned int *bm_ptr = bm_recvbuf + bm_rdispls[partner];
-                int bufcount = 0;
-
-                for (int box = 0; box < plan[partner].nsend_int; box++)
-                {
-                  int *b = plan[partner].send_int + 6 * box;
-                  unsigned int size = dist_box_size(b);
-                  unsigned int mapl = distmap_length(size);
-
-                  for (unsigned int i = 0; i < size; i++)
-                  {
-                    if (!get_distmap_bit(bm_ptr, i))
-                      continue;
-
-                    unsigned int pfft = fft_space_index(i, b);
-                    unsigned int ip, jp, kp;
-                    int g[3];
-
-                    INDEX_TO_COORD(i, ip, jp, kp, b + 3);
-                    g[_x_] = (ip + b[_x_]) % MyGrids[0].GSglobal[_x_];
-                    g[_y_] = (jp + b[_y_]) % MyGrids[0].GSglobal[_y_];
-                    g[_z_] = (kp + b[_z_]) % MyGrids[0].GSglobal[_z_];
-
-                    send_chunk[bufcount].pos =
-                        COORD_TO_INDEX(g[_x_], g[_y_], g[_z_], MyGrids[0].GSglobal);
-                    memcpy(&send_chunk[bufcount].prod, &products[pfft], sizeof(product_data));
-                    bufcount++;
-
-                    if (bufcount == BUFLEN)
-                    {
-                      MPI_Send(send_chunk, bufcount, dist_data_type, partner, 0, MPI_COMM_WORLD);
-                      bufcount = 0;
-                    }
-                  }
-                  bm_ptr += mapl;
-                }
-
-                if (bufcount > 0)
-                  MPI_Send(send_chunk, bufcount, dist_data_type, partner, 0, MPI_COMM_WORLD);
-              }
-              else
-              {
-                /* ---- RECEIVE from partner ---- */
-                int received = 0;
-                int nrecv = plan[partner].recvcount;
-
-                while (received < nrecv)
-                {
-                  int chunk = nrecv - received;
-                  if (chunk > BUFLEN)
-                    chunk = BUFLEN;
-
-                  MPI_Recv(recv_chunk, chunk, dist_data_type, partner, 0,
-                           MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-                  for (int ri = 0; ri < chunk; ri++)
-                  {
-                    int g[3], l[3];
-                    INDEX_TO_COORD(recv_chunk[ri].pos,
-                                   g[_x_], g[_y_], g[_z_], MyGrids[0].GSglobal);
-
-                    l[_x_] = (g[_x_] - subbox.stabl[_x_] + MyGrids[0].GSglobal[_x_]) % MyGrids[0].GSglobal[_x_];
-                    l[_y_] = (g[_y_] - subbox.stabl[_y_] + MyGrids[0].GSglobal[_y_]) % MyGrids[0].GSglobal[_y_];
-                    l[_z_] = (g[_z_] - subbox.stabl[_z_] + MyGrids[0].GSglobal[_z_]) % MyGrids[0].GSglobal[_z_];
-
-                    unsigned int spos = COORD_TO_INDEX(l[_x_], l[_y_], l[_z_], subbox.Lgwbl);
-                    dist_append_frag(spos, &recv_chunk[ri].prod);
-                  }
-                  received += chunk;
-                }
-              }
-            }
-          }
-
-          /* Synchronize before next sub-round so that at most
-             MAX_CONCURRENT_PAIRS pairs are ever active at once */
-          MPI_Barrier(MPI_COMM_WORLD);
-        }
-      }
-
-#ifdef NODE_AWARE_DISTRIBUTE
-      /* Strict phase boundary: no inter-node traffic begins until all
-         intra-node exchanges are complete everywhere. */
       if (node_pass == 0)
+      {
+        /* ---- Intra-node pass: no throttling ---- */
+        if (!ThisTask)
+          printf("  distribute_alltoall node-aware: intra-node pass (full concurrency)\n");
+
+        for (int bit = 1; bit < (1 << log_ntask); bit++)
+        {
+          int partner = ThisTask ^ bit;
+          if (partner >= NTasks)
+            continue;
+          if (node_id[partner] != node_id[ThisTask])
+            continue;
+
+          int send_first = (ThisTask < partner);
+          peer_exchange(partner, send_first, plan, bm_recvbuf, bm_rdispls,
+                        send_chunk, recv_chunk, dist_data_type);
+        }
+
+        /* Strict phase boundary: no inter-node traffic begins until all
+           intra-node exchanges are complete everywhere. */
         MPI_Barrier(MPI_COMM_WORLD);
+      }
+      else
+      {
+        /* ---- Inter-node pass: staggered with MAX_CONCURRENT_PAIRS ---- */
+        if (!ThisTask)
+          printf("  distribute_alltoall node-aware: inter-node pass"
+                 " (staggered, MAX_CONCURRENT_PAIRS=%d)\n",
+                 MAX_CONCURRENT_PAIRS);
+#endif /* NODE_AWARE_DISTRIBUTE */
+
+        for (int bit = 1; bit < (1 << log_ntask); bit++)
+        {
+          int partner = ThisTask ^ bit;
+
+          /* Count active pairs for this bit.  When NODE_AWARE_DISTRIBUTE
+             is active we are in the inter-node pass, so count only
+             inter-node pairs using the global node_id[]. */
+          int num_active_pairs = 0;
+          for (int t = 0; t < NTasks; t++)
+          {
+            int p = t ^ bit;
+            if (p < NTasks && t < p)
+            {
+#ifdef NODE_AWARE_DISTRIBUTE
+              if (node_id[t] == node_id[p])
+                continue; /* skip intra-node pairs */
+#endif
+              num_active_pairs++;
+            }
+          }
+
+          int num_sub_rounds = (num_active_pairs + MAX_CONCURRENT_PAIRS - 1) / MAX_CONCURRENT_PAIRS;
+
+          /* Compute which sub-round this task's pair belongs to */
+          int my_sub_round = -1;
+          if (partner < NTasks)
+          {
+#ifdef NODE_AWARE_DISTRIBUTE
+            /* Skip intra-node partners in the inter-node pass */
+            if (node_id[ThisTask] != node_id[partner])
+            {
+#endif
+              int my_pair_id = 0;
+              int low = (ThisTask < partner) ? ThisTask : partner;
+              for (int t = 0; t < low; t++)
+              {
+                int p = t ^ bit;
+                if (p < NTasks && t < p)
+                {
+#ifdef NODE_AWARE_DISTRIBUTE
+                  if (node_id[t] == node_id[p])
+                    continue;
+#endif
+                  my_pair_id++;
+                }
+              }
+              my_sub_round = my_pair_id / MAX_CONCURRENT_PAIRS;
+#ifdef NODE_AWARE_DISTRIBUTE
+            }
+#endif
+          }
+
+          for (int sr = 0; sr < num_sub_rounds; sr++)
+          {
+            if (sr == my_sub_round && partner < NTasks)
+            {
+              int send_first = (ThisTask < partner);
+              peer_exchange(partner, send_first, plan, bm_recvbuf, bm_rdispls,
+                            send_chunk, recv_chunk, dist_data_type);
+            }
+
+            /* Synchronize before next sub-round so that at most
+               MAX_CONCURRENT_PAIRS pairs are ever active at once */
+            MPI_Barrier(MPI_COMM_WORLD);
+          }
+        }
+
+#ifdef NODE_AWARE_DISTRIBUTE
+      } /* end else (inter-node pass) */
     } /* end node_pass loop */
 #endif
   }
