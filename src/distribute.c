@@ -711,10 +711,13 @@ int distribute_alltoall(void)
 
   /* ---- Staggered hypercube data exchange ---- */
   /* Same blocking MPI_Send/MPI_Recv as the default path, but within each
-     hypercube step the NTasks/2 pairs are split into sub-rounds so that
-     at most MAX_CONCURRENT_PAIRS pairs communicate simultaneously across
-     the whole cluster.  A barrier separates sub-rounds to enforce the
-     global concurrency limit.  No extra memory beyond send_chunk/recv_chunk. */
+     hypercube step pairs are split into sub-rounds so that at most
+     MAX_CONCURRENT_PAIRS pairs communicate simultaneously.  A barrier
+     separates sub-rounds to enforce the global concurrency limit.
+     Without NODE_AWARE_DISTRIBUTE all pairs are staggered.
+     With NODE_AWARE_DISTRIBUTE only the inter-node pass is staggered;
+     intra-node pairs exchange at full concurrency.
+     No extra memory beyond send_chunk/recv_chunk. */
 
   send_chunk = (dist_data *)malloc(BUFLEN * sizeof(dist_data));
   recv_chunk = (dist_data *)malloc(BUFLEN * sizeof(dist_data));
@@ -798,7 +801,7 @@ int distribute_alltoall(void)
           if (partner < NTasks)
           {
 #ifdef NODE_AWARE_DISTRIBUTE
-            /* Skip intra-node partners in the inter-node pass */
+            /* Only proceed for remote partners (inter-node) */
             if (node_id[ThisTask] != node_id[partner])
             {
 #endif
@@ -845,10 +848,17 @@ int distribute_alltoall(void)
 
   t_hypercube = MPI_Wtime() - t_phase;
 
+#ifdef NODE_AWARE_DISTRIBUTE
+  if (!ThisTask)
+    printf("  distribute_alltoall: intra-node full concurrency,"
+           " inter-node staggered (MAX_CONCURRENT_PAIRS=%d, NTasks=%d)\n",
+           MAX_CONCURRENT_PAIRS, NTasks);
+#else
   if (!ThisTask)
     printf("  distribute_alltoall: staggered exchange"
            " (MAX_CONCURRENT_PAIRS=%d, NTasks=%d)\n",
            MAX_CONCURRENT_PAIRS, NTasks);
+#endif
 
 #endif /* MULTILAYER_DISTRIBUTE */
 
