@@ -272,7 +272,7 @@ int distribute_alltoall(void)
   int dtype_committed = 0;
 
 #ifdef NODE_AWARE_DISTRIBUTE
-  int *is_local = NULL; /* 1 if peer is on the same node, 0 otherwise */
+  int *node_id = NULL; /* node identifier per rank (identical on all tasks) */
 #endif
 
   double t_phase, t_keep, t_plan, t_bm_build, t_bm_xchg, t_filter, t_alltoall, t_hypercube;
@@ -510,55 +510,39 @@ int distribute_alltoall(void)
   dtype_committed = 1;
 
 #ifdef NODE_AWARE_DISTRIBUTE
-  /* ---- Discover which peers share the same node ---- */
+  /* ---- Build a global node-id array so that every rank can test
+         whether any two ranks (a, b) share a node, not just ThisTask
+         vs. some peer.  node_id[r] is the smallest world-rank on the
+         node that contains rank r. ---- */
   {
     MPI_Comm node_comm;
     MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, ThisTask,
                         MPI_INFO_NULL, &node_comm);
 
-    /* Build mapping: node_comm rank -> world rank for every peer on this node */
-    int node_size;
-    MPI_Comm_size(node_comm, &node_size);
+    /* Find the minimum world rank on this node = our node leader */
+    int my_node_leader;
+    MPI_Allreduce(&ThisTask, &my_node_leader, 1, MPI_INT, MPI_MIN, node_comm);
 
-    /* Translate node_comm ranks to MPI_COMM_WORLD ranks */
-    MPI_Group world_group, node_group;
-    MPI_Comm_group(MPI_COMM_WORLD, &world_group);
-    MPI_Comm_group(node_comm, &node_group);
-
-    int *node_ranks_in = (int *)malloc(node_size * sizeof(int));
-    int *world_ranks_out = (int *)malloc(node_size * sizeof(int));
-    for (int i = 0; i < node_size; i++)
-      node_ranks_in[i] = i;
-
-    MPI_Group_translate_ranks(node_group, node_size, node_ranks_in,
-                              world_group, world_ranks_out);
-
-    is_local = (int *)calloc(ntasks, sizeof(int));
-    if (!is_local)
+    node_id = (int *)malloc(ntasks * sizeof(int));
+    if (!node_id)
     {
-      printf("ERROR on task %d: alloc failed in distribute_alltoall (is_local)\n", ThisTask);
+      printf("ERROR on task %d: alloc failed in distribute_alltoall (node_id)\n", ThisTask);
       fflush(stdout);
-      free(node_ranks_in);
-      free(world_ranks_out);
-      MPI_Group_free(&node_group);
-      MPI_Group_free(&world_group);
       MPI_Comm_free(&node_comm);
       goto fail;
     }
 
-    for (int i = 0; i < node_size; i++)
-      is_local[world_ranks_out[i]] = 1;
+    /* Gather so every rank knows every other rank's node leader */
+    MPI_Allgather(&my_node_leader, 1, MPI_INT, node_id, 1, MPI_INT, MPI_COMM_WORLD);
 
+    int node_size;
+    MPI_Comm_size(node_comm, &node_size);
     int num_local = node_size - 1; /* excluding self */
     int num_remote = NTasks - node_size;
     if (!ThisTask)
       printf("  distribute_alltoall node-aware: %d local peers, %d remote peers per task\n",
              num_local, num_remote);
 
-    free(node_ranks_in);
-    free(world_ranks_out);
-    MPI_Group_free(&node_group);
-    MPI_Group_free(&world_group);
     MPI_Comm_free(&node_comm);
   }
 #endif /* NODE_AWARE_DISTRIBUTE */
@@ -601,9 +585,9 @@ int distribute_alltoall(void)
 
 #ifdef NODE_AWARE_DISTRIBUTE
         /* Skip partner if it doesn't belong to this node-aware pass */
-        if (node_pass == 0 && !is_local[partner])
+        if (node_pass == 0 && node_id[partner] != node_id[ThisTask])
           continue;
-        if (node_pass == 1 && is_local[partner])
+        if (node_pass == 1 && node_id[partner] == node_id[ThisTask])
           continue;
 #endif
 
@@ -759,9 +743,10 @@ int distribute_alltoall(void)
           if (p < NTasks && t < p)
           {
 #ifdef NODE_AWARE_DISTRIBUTE
-            if (node_pass == 0 && !is_local[p])
+            /* Use global node_id[] so all ranks agree on the count */
+            if (node_pass == 0 && node_id[t] != node_id[p])
               continue;
-            if (node_pass == 1 && is_local[p])
+            if (node_pass == 1 && node_id[t] == node_id[p])
               continue;
 #endif
             num_active_pairs++;
@@ -777,9 +762,9 @@ int distribute_alltoall(void)
 #ifdef NODE_AWARE_DISTRIBUTE
           /* Check if this partner belongs to the current pass at all */
           int partner_in_pass = 1;
-          if (node_pass == 0 && !is_local[partner])
+          if (node_pass == 0 && node_id[ThisTask] != node_id[partner])
             partner_in_pass = 0;
-          if (node_pass == 1 && is_local[partner])
+          if (node_pass == 1 && node_id[ThisTask] == node_id[partner])
             partner_in_pass = 0;
           if (partner_in_pass)
           {
@@ -792,9 +777,9 @@ int distribute_alltoall(void)
               if (p < NTasks && t < p)
               {
 #ifdef NODE_AWARE_DISTRIBUTE
-                if (node_pass == 0 && !is_local[p])
+                if (node_pass == 0 && node_id[t] != node_id[p])
                   continue;
-                if (node_pass == 1 && is_local[p])
+                if (node_pass == 1 && node_id[t] == node_id[p])
                   continue;
 #endif
                 my_pair_id++;
@@ -984,7 +969,7 @@ int distribute_alltoall(void)
   free(bm_rdispls);
   free(plan);
 #ifdef NODE_AWARE_DISTRIBUTE
-  free(is_local);
+  free(node_id);
 #endif
 
   fflush(stdout);
@@ -1008,7 +993,7 @@ fail:
   free(all_subboxes);
   free(all_fftboxes);
 #ifdef NODE_AWARE_DISTRIBUTE
-  free(is_local);
+  free(node_id);
 #endif
   return 1;
 #endif /* CLASSIC_FRAGMENTATION */
