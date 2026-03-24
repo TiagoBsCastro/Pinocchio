@@ -95,7 +95,16 @@ OPTIONS += -DREAD_HUBBLE_TABLE
 
 # --- Distribution --------------------------------------------------------
 #  -DUSE_DISTRIBUTE_ALLTOALL  Use MPI_Alltoall-based distribution.
+#  -DMULTILAYER_DISTRIBUTE    Staggered exchange: limits the number of
+#                             globally concurrent pairs per hypercube step
+#                             to reduce network congestion.
+#  -DMAX_CONCURRENT_PAIRS=N   Max pairs active simultaneously (default 16).
+#  -DNUMA_AWARE_DISTRIBUTE    Two-phase exchange: intra-node first, then
+#                             inter-node.  Can be combined with MULTILAYER.
 OPTIONS += -DUSE_DISTRIBUTE_ALLTOALL
+OPTIONS += -DMULTILAYER_DISTRIBUTE
+OPTIONS += -DMAX_CONCURRENT_PAIRS=56
+OPTIONS += -DNUMA_AWARE_DISTRIBUTE
 
 # --- Other ---------------------------------------------------------------
 #  -DWHITENOISE            White-noise initial conditions.

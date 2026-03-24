@@ -271,6 +271,10 @@ int distribute_alltoall(void)
   MPI_Datatype dist_data_type = MPI_DATATYPE_NULL;
   int dtype_committed = 0;
 
+#ifdef NUMA_AWARE_DISTRIBUTE
+  int *is_local = NULL; /* 1 if peer is on the same node, 0 otherwise */
+#endif
+
   double t_phase, t_keep, t_plan, t_bm_build, t_bm_xchg, t_filter, t_alltoall, t_hypercube;
   double t_min, t_max;
 
@@ -505,6 +509,62 @@ int distribute_alltoall(void)
   MPI_Type_commit(&dist_data_type);
   dtype_committed = 1;
 
+#ifdef NUMA_AWARE_DISTRIBUTE
+  /* ---- Discover which peers share the same node ---- */
+  {
+    MPI_Comm node_comm;
+    MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, ThisTask,
+                        MPI_INFO_NULL, &node_comm);
+
+    /* Build mapping: node_comm rank -> world rank for every peer on this node */
+    int node_size, node_rank;
+    MPI_Comm_size(node_comm, &node_size);
+    MPI_Comm_rank(node_comm, &node_rank);
+
+    /* Translate node_comm ranks to MPI_COMM_WORLD ranks */
+    MPI_Group world_group, node_group;
+    MPI_Comm_group(MPI_COMM_WORLD, &world_group);
+    MPI_Comm_group(node_comm, &node_group);
+
+    int *node_ranks_in = (int *)malloc(node_size * sizeof(int));
+    int *world_ranks_out = (int *)malloc(node_size * sizeof(int));
+    for (int i = 0; i < node_size; i++)
+      node_ranks_in[i] = i;
+
+    MPI_Group_translate_ranks(node_group, node_size, node_ranks_in,
+                              world_group, world_ranks_out);
+
+    is_local = (int *)calloc(ntasks, sizeof(int));
+    if (!is_local)
+    {
+      printf("ERROR on task %d: alloc failed in distribute_alltoall (is_local)\n", ThisTask);
+      fflush(stdout);
+      free(node_ranks_in);
+      free(world_ranks_out);
+      MPI_Group_free(&node_group);
+      MPI_Group_free(&world_group);
+      MPI_Comm_free(&node_comm);
+      goto fail;
+    }
+
+    for (int i = 0; i < node_size; i++)
+      is_local[world_ranks_out[i]] = 1;
+
+    int num_local = node_size - 1; /* excluding self */
+    int num_remote = NTasks - node_size;
+    if (!ThisTask)
+      printf("  distribute_alltoall NUMA: %d local peers, %d remote peers per task\n",
+             num_local, num_remote);
+
+    free(node_ranks_in);
+    free(world_ranks_out);
+    MPI_Group_free(&node_group);
+    MPI_Group_free(&world_group);
+    MPI_Comm_free(&node_comm);
+  }
+#endif /* NUMA_AWARE_DISTRIBUTE */
+
+#ifndef MULTILAYER_DISTRIBUTE
   /* ---- Allocate chunk buffers ---- */
   send_chunk = (dist_data *)malloc(BUFLEN * sizeof(dist_data));
   recv_chunk = (dist_data *)malloc(BUFLEN * sizeof(dist_data));
@@ -524,100 +584,318 @@ int distribute_alltoall(void)
       if ((1 << log_ntask) >= NTasks)
         break;
 
-    for (int bit = 1; bit < (1 << log_ntask); bit++)
+#ifdef NUMA_AWARE_DISTRIBUTE
+    /* Two passes: pass 0 = intra-node only, pass 1 = inter-node only */
+    for (int numa_pass = 0; numa_pass < 2; numa_pass++)
     {
-      int partner = ThisTask ^ bit;
-      if (partner >= NTasks)
-        continue;
+      if (!ThisTask && numa_pass == 0)
+        printf("  distribute_alltoall NUMA: intra-node pass\n");
+      else if (!ThisTask && numa_pass == 1)
+        printf("  distribute_alltoall NUMA: inter-node pass\n");
+#endif
 
-      int send_first = (ThisTask < partner);
-
-      for (int phase = 0; phase < 2; phase++)
+      for (int bit = 1; bit < (1 << log_ntask); bit++)
       {
-        int do_send = (phase == 0) ? send_first : !send_first;
+        int partner = ThisTask ^ bit;
+        if (partner >= NTasks)
+          continue;
 
-        if (do_send)
+#ifdef NUMA_AWARE_DISTRIBUTE
+        /* Skip partner if it doesn't belong to this NUMA pass */
+        if (numa_pass == 0 && !is_local[partner])
+          continue;
+        if (numa_pass == 1 && is_local[partner])
+          continue;
+#endif
+
+        int send_first = (ThisTask < partner);
+
+        for (int phase = 0; phase < 2; phase++)
         {
-          /* ---- SEND to partner ---- */
-          if (plan[partner].sendcount == 0)
-            continue;
+          int do_send = (phase == 0) ? send_first : !send_first;
 
-          unsigned int *bm_ptr = bm_recvbuf + bm_rdispls[partner];
-          int bufcount = 0;
-
-          for (int box = 0; box < plan[partner].nsend_int; box++)
+          if (do_send)
           {
-            int *b = plan[partner].send_int + 6 * box;
-            unsigned int size = dist_box_size(b);
-            unsigned int mapl = distmap_length(size);
+            /* ---- SEND to partner ---- */
+            if (plan[partner].sendcount == 0)
+              continue;
 
-            for (unsigned int i = 0; i < size; i++)
+            unsigned int *bm_ptr = bm_recvbuf + bm_rdispls[partner];
+            int bufcount = 0;
+
+            for (int box = 0; box < plan[partner].nsend_int; box++)
             {
-              if (!get_distmap_bit(bm_ptr, i))
-                continue;
+              int *b = plan[partner].send_int + 6 * box;
+              unsigned int size = dist_box_size(b);
+              unsigned int mapl = distmap_length(size);
 
-              unsigned int pfft = fft_space_index(i, b);
-              unsigned int ip, jp, kp;
-              int g[3];
-
-              INDEX_TO_COORD(i, ip, jp, kp, b + 3);
-              g[_x_] = (ip + b[_x_]) % MyGrids[0].GSglobal[_x_];
-              g[_y_] = (jp + b[_y_]) % MyGrids[0].GSglobal[_y_];
-              g[_z_] = (kp + b[_z_]) % MyGrids[0].GSglobal[_z_];
-
-              send_chunk[bufcount].pos =
-                  COORD_TO_INDEX(g[_x_], g[_y_], g[_z_], MyGrids[0].GSglobal);
-              memcpy(&send_chunk[bufcount].prod, &products[pfft], sizeof(product_data));
-              bufcount++;
-
-              if (bufcount == BUFLEN)
+              for (unsigned int i = 0; i < size; i++)
               {
-                MPI_Send(send_chunk, bufcount, dist_data_type, partner, 0, MPI_COMM_WORLD);
-                bufcount = 0;
+                if (!get_distmap_bit(bm_ptr, i))
+                  continue;
+
+                unsigned int pfft = fft_space_index(i, b);
+                unsigned int ip, jp, kp;
+                int g[3];
+
+                INDEX_TO_COORD(i, ip, jp, kp, b + 3);
+                g[_x_] = (ip + b[_x_]) % MyGrids[0].GSglobal[_x_];
+                g[_y_] = (jp + b[_y_]) % MyGrids[0].GSglobal[_y_];
+                g[_z_] = (kp + b[_z_]) % MyGrids[0].GSglobal[_z_];
+
+                send_chunk[bufcount].pos =
+                    COORD_TO_INDEX(g[_x_], g[_y_], g[_z_], MyGrids[0].GSglobal);
+                memcpy(&send_chunk[bufcount].prod, &products[pfft], sizeof(product_data));
+                bufcount++;
+
+                if (bufcount == BUFLEN)
+                {
+                  MPI_Send(send_chunk, bufcount, dist_data_type, partner, 0, MPI_COMM_WORLD);
+                  bufcount = 0;
+                }
               }
+              bm_ptr += mapl;
             }
-            bm_ptr += mapl;
+
+            if (bufcount > 0)
+              MPI_Send(send_chunk, bufcount, dist_data_type, partner, 0, MPI_COMM_WORLD);
           }
-
-          if (bufcount > 0)
-            MPI_Send(send_chunk, bufcount, dist_data_type, partner, 0, MPI_COMM_WORLD);
-        }
-        else
-        {
-          /* ---- RECEIVE from partner ---- */
-          int received = 0;
-          int nrecv = plan[partner].recvcount;
-
-          while (received < nrecv)
+          else
           {
-            int chunk = nrecv - received;
-            if (chunk > BUFLEN)
-              chunk = BUFLEN;
+            /* ---- RECEIVE from partner ---- */
+            int received = 0;
+            int nrecv = plan[partner].recvcount;
 
-            MPI_Recv(recv_chunk, chunk, dist_data_type, partner, 0,
-                     MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-            for (int ri = 0; ri < chunk; ri++)
+            while (received < nrecv)
             {
-              int g[3], l[3];
-              INDEX_TO_COORD(recv_chunk[ri].pos,
-                             g[_x_], g[_y_], g[_z_], MyGrids[0].GSglobal);
+              int chunk = nrecv - received;
+              if (chunk > BUFLEN)
+                chunk = BUFLEN;
 
-              l[_x_] = (g[_x_] - subbox.stabl[_x_] + MyGrids[0].GSglobal[_x_]) % MyGrids[0].GSglobal[_x_];
-              l[_y_] = (g[_y_] - subbox.stabl[_y_] + MyGrids[0].GSglobal[_y_]) % MyGrids[0].GSglobal[_y_];
-              l[_z_] = (g[_z_] - subbox.stabl[_z_] + MyGrids[0].GSglobal[_z_]) % MyGrids[0].GSglobal[_z_];
+              MPI_Recv(recv_chunk, chunk, dist_data_type, partner, 0,
+                       MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-              unsigned int spos = COORD_TO_INDEX(l[_x_], l[_y_], l[_z_], subbox.Lgwbl);
-              dist_append_frag(spos, &recv_chunk[ri].prod);
+              for (int ri = 0; ri < chunk; ri++)
+              {
+                int g[3], l[3];
+                INDEX_TO_COORD(recv_chunk[ri].pos,
+                               g[_x_], g[_y_], g[_z_], MyGrids[0].GSglobal);
+
+                l[_x_] = (g[_x_] - subbox.stabl[_x_] + MyGrids[0].GSglobal[_x_]) % MyGrids[0].GSglobal[_x_];
+                l[_y_] = (g[_y_] - subbox.stabl[_y_] + MyGrids[0].GSglobal[_y_]) % MyGrids[0].GSglobal[_y_];
+                l[_z_] = (g[_z_] - subbox.stabl[_z_] + MyGrids[0].GSglobal[_z_]) % MyGrids[0].GSglobal[_z_];
+
+                unsigned int spos = COORD_TO_INDEX(l[_x_], l[_y_], l[_z_], subbox.Lgwbl);
+                dist_append_frag(spos, &recv_chunk[ri].prod);
+              }
+              received += chunk;
             }
-            received += chunk;
           }
         }
       }
-    }
+
+#ifdef NUMA_AWARE_DISTRIBUTE
+    } /* end numa_pass loop */
+#endif
   }
 
   t_hypercube = MPI_Wtime() - t_phase;
+
+#else /* MULTILAYER_DISTRIBUTE */
+
+#ifndef MAX_CONCURRENT_PAIRS
+#define MAX_CONCURRENT_PAIRS 16
+#endif
+
+  /* ---- Staggered hypercube data exchange ---- */
+  /* Same blocking MPI_Send/MPI_Recv as the default path, but within each
+     hypercube step the NTasks/2 pairs are split into sub-rounds so that
+     at most MAX_CONCURRENT_PAIRS pairs communicate simultaneously across
+     the whole cluster.  A barrier separates sub-rounds to enforce the
+     global concurrency limit.  No extra memory beyond send_chunk/recv_chunk. */
+
+  send_chunk = (dist_data *)malloc(BUFLEN * sizeof(dist_data));
+  recv_chunk = (dist_data *)malloc(BUFLEN * sizeof(dist_data));
+
+  if (!send_chunk || !recv_chunk)
+  {
+    printf("ERROR on task %d: alloc failed in distribute_alltoall (chunks/staggered)\n", ThisTask);
+    fflush(stdout);
+    goto fail;
+  }
+
+  t_phase = MPI_Wtime();
+  {
+    int log_ntask;
+    for (log_ntask = 0; log_ntask < 1000; log_ntask++)
+      if ((1 << log_ntask) >= NTasks)
+        break;
+
+#ifdef NUMA_AWARE_DISTRIBUTE
+    /* Two passes: pass 0 = intra-node only, pass 1 = inter-node only */
+    for (int numa_pass = 0; numa_pass < 2; numa_pass++)
+    {
+      if (!ThisTask && numa_pass == 0)
+        printf("  distribute_alltoall staggered NUMA: intra-node pass\n");
+      else if (!ThisTask && numa_pass == 1)
+        printf("  distribute_alltoall staggered NUMA: inter-node pass\n");
+#endif
+
+      for (int bit = 1; bit < (1 << log_ntask); bit++)
+      {
+        int partner = ThisTask ^ bit;
+
+        /* Determine how many active pairs exist for this bit value.
+           A pair (A, B) with A < B is active when both A < NTasks and
+           B < NTasks.  Each active pair gets a sequential pair_id based
+           on the smaller rank in the pair. */
+        int num_active_pairs = 0;
+        for (int t = 0; t < NTasks; t++)
+        {
+          int p = t ^ bit;
+          if (p < NTasks && t < p)
+            num_active_pairs++;
+        }
+
+        int num_sub_rounds = (num_active_pairs + MAX_CONCURRENT_PAIRS - 1) / MAX_CONCURRENT_PAIRS;
+
+        /* Compute which sub-round this task's pair belongs to */
+        int my_sub_round = -1;
+        if (partner < NTasks)
+        {
+          int my_pair_id = 0;
+          int low = (ThisTask < partner) ? ThisTask : partner;
+          for (int t = 0; t < low; t++)
+          {
+            int p = t ^ bit;
+            if (p < NTasks && t < p)
+              my_pair_id++;
+          }
+          my_sub_round = my_pair_id / MAX_CONCURRENT_PAIRS;
+        }
+
+        for (int sr = 0; sr < num_sub_rounds; sr++)
+        {
+          int do_exchange = (sr == my_sub_round && partner < NTasks);
+#ifdef NUMA_AWARE_DISTRIBUTE
+          /* NUMA skip must be checked HERE (not at the bit-loop level)
+             to ensure all tasks still participate in the barrier below. */
+          if (do_exchange)
+          {
+            if (numa_pass == 0 && !is_local[partner])
+              do_exchange = 0;
+            if (numa_pass == 1 && is_local[partner])
+              do_exchange = 0;
+          }
+#endif
+          if (do_exchange)
+          {
+            /* This pair is active in this sub-round */
+            int send_first = (ThisTask < partner);
+
+            for (int phase = 0; phase < 2; phase++)
+            {
+              int do_send = (phase == 0) ? send_first : !send_first;
+
+              if (do_send)
+              {
+                /* ---- SEND to partner ---- */
+                if (plan[partner].sendcount == 0)
+                  continue;
+
+                unsigned int *bm_ptr = bm_recvbuf + bm_rdispls[partner];
+                int bufcount = 0;
+
+                for (int box = 0; box < plan[partner].nsend_int; box++)
+                {
+                  int *b = plan[partner].send_int + 6 * box;
+                  unsigned int size = dist_box_size(b);
+                  unsigned int mapl = distmap_length(size);
+
+                  for (unsigned int i = 0; i < size; i++)
+                  {
+                    if (!get_distmap_bit(bm_ptr, i))
+                      continue;
+
+                    unsigned int pfft = fft_space_index(i, b);
+                    unsigned int ip, jp, kp;
+                    int g[3];
+
+                    INDEX_TO_COORD(i, ip, jp, kp, b + 3);
+                    g[_x_] = (ip + b[_x_]) % MyGrids[0].GSglobal[_x_];
+                    g[_y_] = (jp + b[_y_]) % MyGrids[0].GSglobal[_y_];
+                    g[_z_] = (kp + b[_z_]) % MyGrids[0].GSglobal[_z_];
+
+                    send_chunk[bufcount].pos =
+                        COORD_TO_INDEX(g[_x_], g[_y_], g[_z_], MyGrids[0].GSglobal);
+                    memcpy(&send_chunk[bufcount].prod, &products[pfft], sizeof(product_data));
+                    bufcount++;
+
+                    if (bufcount == BUFLEN)
+                    {
+                      MPI_Send(send_chunk, bufcount, dist_data_type, partner, 0, MPI_COMM_WORLD);
+                      bufcount = 0;
+                    }
+                  }
+                  bm_ptr += mapl;
+                }
+
+                if (bufcount > 0)
+                  MPI_Send(send_chunk, bufcount, dist_data_type, partner, 0, MPI_COMM_WORLD);
+              }
+              else
+              {
+                /* ---- RECEIVE from partner ---- */
+                int received = 0;
+                int nrecv = plan[partner].recvcount;
+
+                while (received < nrecv)
+                {
+                  int chunk = nrecv - received;
+                  if (chunk > BUFLEN)
+                    chunk = BUFLEN;
+
+                  MPI_Recv(recv_chunk, chunk, dist_data_type, partner, 0,
+                           MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+                  for (int ri = 0; ri < chunk; ri++)
+                  {
+                    int g[3], l[3];
+                    INDEX_TO_COORD(recv_chunk[ri].pos,
+                                   g[_x_], g[_y_], g[_z_], MyGrids[0].GSglobal);
+
+                    l[_x_] = (g[_x_] - subbox.stabl[_x_] + MyGrids[0].GSglobal[_x_]) % MyGrids[0].GSglobal[_x_];
+                    l[_y_] = (g[_y_] - subbox.stabl[_y_] + MyGrids[0].GSglobal[_y_]) % MyGrids[0].GSglobal[_y_];
+                    l[_z_] = (g[_z_] - subbox.stabl[_z_] + MyGrids[0].GSglobal[_z_]) % MyGrids[0].GSglobal[_z_];
+
+                    unsigned int spos = COORD_TO_INDEX(l[_x_], l[_y_], l[_z_], subbox.Lgwbl);
+                    dist_append_frag(spos, &recv_chunk[ri].prod);
+                  }
+                  received += chunk;
+                }
+              }
+            }
+          }
+
+          /* Synchronize before next sub-round so that at most
+             MAX_CONCURRENT_PAIRS pairs are ever active at once */
+          MPI_Barrier(MPI_COMM_WORLD);
+        }
+      }
+
+#ifdef NUMA_AWARE_DISTRIBUTE
+    } /* end numa_pass loop */
+#endif
+  }
+
+  t_hypercube = MPI_Wtime() - t_phase;
+
+  if (!ThisTask)
+    printf("  distribute_alltoall: staggered exchange"
+           " (MAX_CONCURRENT_PAIRS=%d, NTasks=%d)\n",
+           MAX_CONCURRENT_PAIRS, NTasks);
+
+#endif /* MULTILAYER_DISTRIBUTE */
 
   /* ---- Phase timing report ---- */
   if (!ThisTask)
@@ -680,6 +958,9 @@ int distribute_alltoall(void)
   free(bm_recvbuf);
   free(bm_rdispls);
   free(plan);
+#ifdef NUMA_AWARE_DISTRIBUTE
+  free(is_local);
+#endif
 
   fflush(stdout);
   MPI_Barrier(MPI_COMM_WORLD);
@@ -701,6 +982,9 @@ fail:
   free(plan);
   free(all_subboxes);
   free(all_fftboxes);
+#ifdef NUMA_AWARE_DISTRIBUTE
+  free(is_local);
+#endif
   return 1;
 #endif /* CLASSIC_FRAGMENTATION */
 }
