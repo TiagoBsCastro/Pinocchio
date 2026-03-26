@@ -1032,9 +1032,8 @@ int recompute_group_velocities()
 
   int diag_bad_total = 0;
   MPI_Reduce(&diag_bad_walks, &diag_bad_total, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
-  if (!ThisTask)
-    printf("[%s] DIAG recompute_group_velocities: %d groups processed, %d bad walks\n",
-           fdate(), diag_ngroups, diag_bad_total);
+  dprintf(VDIAG, 0, "[%s] DIAG recompute_group_velocities: %d groups processed, %d bad walks\n",
+          fdate(), diag_ngroups, diag_bad_total);
 
   return 0;
 }
