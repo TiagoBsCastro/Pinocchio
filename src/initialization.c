@@ -1833,7 +1833,7 @@ int set_scaledep_GM()
 #ifdef ELL_CLASSIC
     for (i = 0; i < NBINS; i++)
       vector[i] = log10(vector[i]);
-    gsl_spline_init(SPLINE_INVGROW[ismooth], vector, &(SPLINE[SP_TIME]->x[0]), NBINS);
+    checked_spline_init(SPLINE_INVGROW[ismooth], vector, &(SPLINE[SP_TIME]->x[0]), NBINS, "SPLINE_INVGROW");
 #endif
   }
 #ifdef DEBUG

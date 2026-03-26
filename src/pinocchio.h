@@ -597,6 +597,7 @@ int write_timeless_snapshot(void);
 #endif
 
 /* prototypes for functions defined in cosmo.c */
+int checked_spline_init(gsl_spline *, const double[], const double[], size_t, const char *);
 int initialize_cosmology();
 int initialize_MassVariance();
 double OmegaMatter(double);

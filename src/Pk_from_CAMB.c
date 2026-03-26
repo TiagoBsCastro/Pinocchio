@@ -249,9 +249,9 @@ int initialize_ScaleDependentGrowth(void)
             ThisVel[ThisOutput] = sqrt(result / VarVel[ThisRadius]);
         }
         /* initialization of splines */
-        gsl_spline_init(splineGrowMatter[ThisRadius], CAMBScalefac, ThisMatter, params.camb.NCAMB);
-        gsl_spline_init(splineGrowVel[ThisRadius], CAMBScalefac, ThisVel, params.camb.NCAMB);
-        gsl_spline_init(splineInvGrowMatter[ThisRadius], ThisMatter, CAMBScalefac, params.camb.NCAMB);
+        checked_spline_init(splineGrowMatter[ThisRadius], CAMBScalefac, ThisMatter, params.camb.NCAMB, "splineGrowMatter");
+        checked_spline_init(splineGrowVel[ThisRadius], CAMBScalefac, ThisVel, params.camb.NCAMB, "splineGrowVel");
+        checked_spline_init(splineInvGrowMatter[ThisRadius], ThisMatter, CAMBScalefac, params.camb.NCAMB, "splineInvGrowMatter");
 
         /* fomega */
         for (ThisOutput = 0; ThisOutput < params.camb.NCAMB; ThisOutput++)
@@ -288,8 +288,8 @@ int initialize_ScaleDependentGrowth(void)
 #endif
         }
         /* initialization of splines */
-        gsl_spline_init(splineFomega[ThisRadius], CAMBScalefac, ThisfO, params.camb.NCAMB);
-        gsl_spline_init(splineFomega2[ThisRadius], CAMBScalefac, ThisfO2, params.camb.NCAMB);
+        checked_spline_init(splineFomega[ThisRadius], CAMBScalefac, ThisfO, params.camb.NCAMB, "splineFomega");
+        checked_spline_init(splineFomega2[ThisRadius], CAMBScalefac, ThisfO2, params.camb.NCAMB, "splineFomega2");
     }
 
 #ifdef OUTPUT_GM
@@ -338,9 +338,9 @@ double PowerFromCAMB(double k)
     /* initialize gsl spline the first time the function is called, or when output changes */
     if (spline == 0x0 || ThisOutput != LastOutput)
     {
-        gsl_spline_init(spline, StoredLogK,
-                        StoredLogTotalPowerSpectrum + ThisOutput * params.camb.Nkbins,
-                        params.camb.Nkbins);
+        checked_spline_init(spline, StoredLogK,
+                            StoredLogTotalPowerSpectrum + ThisOutput * params.camb.Nkbins,
+                            params.camb.Nkbins, "spline_PowerFromCAMB");
     }
 
     LastOutput = ThisOutput;
