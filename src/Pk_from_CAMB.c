@@ -58,6 +58,7 @@ int read_power_table_from_CAMB()
        and stores them in memory. It assumes inputs are already in h-units. */
 
     int i, j, dummy, ff;
+    int err = 0;
     double kappa, Pk;
     char filename[BLENGTH], buffer[BLENGTH], *ugo;
     FILE *fd;
@@ -87,23 +88,29 @@ int read_power_table_from_CAMB()
         if (!params.camb.NCAMB)
         {
             printf("Error on Task 0: CAMB file %s not found\n", filename);
-            return 1;
+            err = 1;
         }
         else if (!params.camb.Nkbins)
         {
             sprintf(filename, "%s_%03d.dat", params.camb.MatterFile, 0);
             printf("Error on Task 0: problem in reading CAMB file %s\n", filename);
-            return 1;
+            err = 1;
         }
         else if (params.camb.ReferenceOutput > params.camb.NCAMB - 1)
         {
             printf("Error on Task 0: ReferenceOutput is larger than NCAMB-1\n");
-            return 1;
+            err = 1;
         }
 
-        printf("Found %d CAMB matter power files with %d lines each (assuming P_cb in h-units)\n",
-               params.camb.NCAMB, params.camb.Nkbins);
+        if (!err)
+            printf("Found %d CAMB matter power files with %d lines each (assuming P_cb in h-units)\n",
+                   params.camb.NCAMB, params.camb.Nkbins);
     }
+
+    /* all tasks agree on success/failure before proceeding to broadcasts */
+    MPI_Bcast(&err, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    if (err)
+        return 1;
 
     /* Broadcast NCAMB and Nkbins */
     MPI_Bcast(&params.camb.NCAMB, sizeof(int), MPI_BYTE, 0, MPI_COMM_WORLD);
@@ -138,19 +145,28 @@ int read_power_table_from_CAMB()
         if ((fd = fopen(params.camb.RedshiftsFile, "r")) == 0x0)
         {
             printf("Error: Redshift file %s not found\n", params.camb.RedshiftsFile);
-            return 1;
+            err = 1;
         }
-        for (i = 0; i < params.camb.NCAMB; i++)
-            ff = fscanf(fd, "%d %lf", &dummy, CAMBRedshifts + i);
-        fclose(fd);
 
-        /* The last redshift MUST be z=0 */
-        if (CAMBRedshifts[params.camb.NCAMB - 1] != 0.0)
+        if (!err)
         {
-            printf("ERROR on Task 0: last CAMB redsbift must be 0.0\n");
-            return 1;
+            for (i = 0; i < params.camb.NCAMB; i++)
+                ff = fscanf(fd, "%d %lf", &dummy, CAMBRedshifts + i);
+            fclose(fd);
+
+            /* The last redshift MUST be z=0 */
+            if (CAMBRedshifts[params.camb.NCAMB - 1] != 0.0)
+            {
+                printf("ERROR on Task 0: last CAMB redshift must be 0.0\n");
+                err = 1;
+            }
         }
     }
+
+    /* all tasks agree on success/failure before proceeding to data broadcasts */
+    MPI_Bcast(&err, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    if (err)
+        return 1;
 
     /* broadcast of loaded and computed quantities */
     MPI_Bcast(StoredLogK, params.camb.Nkbins, MPI_DOUBLE, 0, MPI_COMM_WORLD);
@@ -326,6 +342,11 @@ int initialize_ScaleDependentGrowth(void)
     return 0;
 
 fail:
+#ifdef OUTPUT_GM
+    if (!ThisTask)
+        fclose(fd);
+#endif
+
     gsl_spline_free(spline);
     gsl_interp_accel_free(accel);
     spline = NULL;

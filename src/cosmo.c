@@ -1376,6 +1376,7 @@ int read_Pk_table_from_CAMB(double *scalef, double *grow1, double *grow2, double
   */
 
   int i, j, dummy, i1, i2, First, Today;
+  int err = 0;
   double kappa, myPk, z, Om, slope;
   char filename[LBLENGTH], buffer[LBLENGTH], *ugo;
   FILE *fd;
@@ -1406,18 +1407,24 @@ int read_Pk_table_from_CAMB(double *scalef, double *grow1, double *grow2, double
     if (!params.camb.NCAMB)
     {
       printf("Error on Task 0: CAMB file %s not found\n", filename);
-      return 1;
+      err = 1;
     }
     else if (!NPowerTable)
     {
       sprintf(filename, "%s_%03d.dat", params.camb.MatterFile, 0);
       printf("Error on Task 0: problem in reading CAMB file %s\n", filename);
-      return 1;
+      err = 1;
     }
 
-    printf("Found %d CAMB matter power files with %d lines each\n",
-           params.camb.NCAMB, NPowerTable);
+    if (!err)
+      printf("Found %d CAMB matter power files with %d lines each\n",
+             params.camb.NCAMB, NPowerTable);
   }
+
+  /* all tasks agree on success/failure before proceeding to broadcasts */
+  MPI_Bcast(&err, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  if (err)
+    return 1;
 
   /* broadcast sizes */
   MPI_Bcast(&params.camb.NCAMB, sizeof(int), MPI_BYTE, 0, MPI_COMM_WORLD);
@@ -1436,59 +1443,72 @@ int read_Pk_table_from_CAMB(double *scalef, double *grow1, double *grow2, double
     if ((fd = fopen(params.camb.RedshiftsFile, "r")) == 0x0)
     {
       printf("Error: Redshift file %s not found\n", params.camb.RedshiftsFile);
-      goto fail_arrays;
+      err = 1;
     }
-    for (i = 0; i < params.camb.NCAMB; i++)
-      fscanf(fd, "%d %lf", &dummy, CAMBScalefac + i);
-    fclose(fd);
 
-    if (CAMBScalefac[params.camb.NCAMB - 1] != 0.0)
+    if (!err)
     {
-      printf("ERROR on Task 0: last CAMB redshift must be 0.0\n");
-      goto fail_arrays;
-    }
-    for (i = 0; i < params.camb.NCAMB; i++)
-      CAMBScalefac[i] = 1. / (1. + CAMBScalefac[i]);
-
-    /* loop over files starting from z=0 one (last index) */
-    for (i = params.camb.NCAMB - 1; i >= 0; i--)
-    {
-      sprintf(filename, "%s_%03d.dat", params.camb.MatterFile, i);
-      fd = fopen(filename, "r");
-      for (j = 0; j < NPowerTable; j++)
-      {
-        fscanf(fd, "%lf %lf", &kappa, &myPk); /* kappa: k in h/Mpc; myPk: P in (Mpc/h)^3 */
-
-        if (i == params.camb.NCAMB - 1)
-        {
-          /* store z=0 table as log10[k^3 P(k)] and k (true 1/Mpc) */
-          Pk[j] = log10(kappa * kappa * kappa * myPk);
-          logk[j] = log10(kappa * params.Hubble100); /* k_true = h * (k in h/Mpc) */
-          if (params.InputSpectrum_UnitLength_in_cm != 0.0)
-            logk[j] += log10(params.InputSpectrum_UnitLength_in_cm / UnitLength_in_cm);
-          lingrow[i + j * params.camb.NCAMB] = 0.0;
-        }
-        else
-        {
-          /* growth from half the difference of log10[k^3 P(k,z)] and z=0 */
-          lingrow[i + j * params.camb.NCAMB] =
-              0.5 * (log10(kappa * kappa * kappa * myPk) - Pk[j]);
-        }
-      }
+      for (i = 0; i < params.camb.NCAMB; i++)
+        fscanf(fd, "%d %lf", &dummy, CAMBScalefac + i);
       fclose(fd);
+
+      if (CAMBScalefac[params.camb.NCAMB - 1] != 0.0)
+      {
+        printf("ERROR on Task 0: last CAMB redshift must be 0.0\n");
+        err = 1;
+      }
     }
 
-    /* consistency of k-range w.r.t. def_splines.h grid */
-    if (logk[0] > LOGKMIN || logk[NPowerTable - 1] < LOGKMIN + DELTALOGK * (NkBINS - 1))
+    if (!err)
     {
-      printf("ERROR: CAMB P(k) tables run from k=%10g to k=%10g 1/Mpc\n",
-             pow(10., logk[0]), pow(10., logk[NPowerTable - 1]));
-      printf("       while the growth rate is requested from k=%10g to k=%10g 1/Mpc\n",
-             pow(10., LOGKMIN), pow(10., LOGKMIN + DELTALOGK * (NkBINS - 1)));
-      printf("       please extend the k range in CAMB or fix LOGKMIN, DELTALOGK and NkBINS in def_splines.h\n");
-      goto fail_arrays;
+      for (i = 0; i < params.camb.NCAMB; i++)
+        CAMBScalefac[i] = 1. / (1. + CAMBScalefac[i]);
+
+      /* loop over files starting from z=0 one (last index) */
+      for (i = params.camb.NCAMB - 1; i >= 0; i--)
+      {
+        sprintf(filename, "%s_%03d.dat", params.camb.MatterFile, i);
+        fd = fopen(filename, "r");
+        for (j = 0; j < NPowerTable; j++)
+        {
+          fscanf(fd, "%lf %lf", &kappa, &myPk); /* kappa: k in h/Mpc; myPk: P in (Mpc/h)^3 */
+
+          if (i == params.camb.NCAMB - 1)
+          {
+            /* store z=0 table as log10[k^3 P(k)] and k (true 1/Mpc) */
+            Pk[j] = log10(kappa * kappa * kappa * myPk);
+            logk[j] = log10(kappa * params.Hubble100); /* k_true = h * (k in h/Mpc) */
+            if (params.InputSpectrum_UnitLength_in_cm != 0.0)
+              logk[j] += log10(params.InputSpectrum_UnitLength_in_cm / UnitLength_in_cm);
+            lingrow[i + j * params.camb.NCAMB] = 0.0;
+          }
+          else
+          {
+            /* growth from half the difference of log10[k^3 P(k,z)] and z=0 */
+            lingrow[i + j * params.camb.NCAMB] =
+                0.5 * (log10(kappa * kappa * kappa * myPk) - Pk[j]);
+          }
+        }
+        fclose(fd);
+      }
+
+      /* consistency of k-range w.r.t. def_splines.h grid */
+      if (logk[0] > LOGKMIN || logk[NPowerTable - 1] < LOGKMIN + DELTALOGK * (NkBINS - 1))
+      {
+        printf("ERROR: CAMB P(k) tables run from k=%10g to k=%10g 1/Mpc\n",
+               pow(10., logk[0]), pow(10., logk[NPowerTable - 1]));
+        printf("       while the growth rate is requested from k=%10g to k=%10g 1/Mpc\n",
+               pow(10., LOGKMIN), pow(10., LOGKMIN + DELTALOGK * (NkBINS - 1)));
+        printf("       please extend the k range in CAMB or fix LOGKMIN, DELTALOGK and NkBINS in def_splines.h\n");
+        err = 1;
+      }
     }
   }
+
+  /* all tasks agree on success/failure before proceeding to data broadcasts */
+  MPI_Bcast(&err, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  if (err)
+    goto fail_arrays;
 
   /* broadcast data to all tasks */
   MPI_Bcast(Pk, NPowerTable, MPI_DOUBLE, 0, MPI_COMM_WORLD);
