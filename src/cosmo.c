@@ -931,6 +931,7 @@ int read_TabulatedEoS(void)
   /* Reads the tabulated Equation of State of dark energy from a file */
 
   int i;
+  int err = 0;
   FILE *fd;
   double a, w;
   double *scalef, *EoS;
@@ -941,30 +942,40 @@ int read_TabulatedEoS(void)
     {
       printf("ERROR on task 0: can't open tabulated EoS in file '%s'\n", params.TabulatedEoSfile);
       fflush(stdout);
-      return 1;
+      err = 1;
     }
 
-    NtabEoS = 0;
-    while (1)
+    if (!err)
     {
-      if (fscanf(fd, " %lg %lg ", &a, &w) == 2)
-        NtabEoS++;
+      NtabEoS = 0;
+      while (1)
+      {
+        if (fscanf(fd, " %lg %lg ", &a, &w) == 2)
+          NtabEoS++;
+        else
+          break;
+      }
+
+      fclose(fd);
+
+      if (!NtabEoS)
+      {
+        printf("ERROR on task 0: can't read tabulated EoS in file '%s'\n", params.TabulatedEoSfile);
+        fflush(stdout);
+        err = 1;
+      }
       else
-        break;
+      {
+        printf("Found %d pairs of values in tabulated EoS file\n", NtabEoS);
+        fflush(stdout);
+      }
     }
-
-    fclose(fd);
-
-    if (!NtabEoS)
-    {
-      printf("ERROR on task 0: can't read tabulated EoS in file '%s'\n", params.TabulatedEoSfile);
-      fflush(stdout);
-      return 1;
-    }
-
-    printf("Found %d pairs of values in tabulated EoS file\n", NtabEoS);
-    fflush(stdout);
   }
+
+  /* all tasks agree on success/failure before proceeding to broadcasts */
+  MPI_Bcast(&err, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  if (err)
+    return 1;
 
   /* Task 0 communicates the number of lines to all tasks */
   MPI_Bcast(&NtabEoS, sizeof(int), MPI_BYTE, 0, MPI_COMM_WORLD);
@@ -1024,6 +1035,7 @@ int read_TabulatedHubble(void)
     return 0; /* nothing to do */
 
   int n = 0;
+  int err = 0;
   FILE *fd;
   double z, H;
   double *ax, *Hz;
@@ -1034,18 +1046,28 @@ int read_TabulatedHubble(void)
     {
       printf("ERROR on task 0: can't open Hubble table file '%s' (READ_HUBBLE_TABLE)\n", params.HubbleTableFile);
       fflush(stdout);
-      return 1;
+      err = 1;
     }
-    while (fscanf(fd, " %lf %lf", &z, &H) == 2)
-      n++;
-    fclose(fd);
-    if (!n)
+
+    if (!err)
     {
-      printf("ERROR on task 0: Hubble table file '%s' is empty or malformed (READ_HUBBLE_TABLE)\n", params.HubbleTableFile);
-      fflush(stdout);
-      return 1;
+      while (fscanf(fd, " %lf %lf", &z, &H) == 2)
+        n++;
+      fclose(fd);
+
+      if (!n)
+      {
+        printf("ERROR on task 0: Hubble table file '%s' is empty or malformed (READ_HUBBLE_TABLE)\n", params.HubbleTableFile);
+        fflush(stdout);
+        err = 1;
+      }
     }
   }
+
+  /* all tasks agree on success/failure before proceeding to broadcasts */
+  MPI_Bcast(&err, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  if (err)
+    return 1;
 
   MPI_Bcast(&n, sizeof(int), MPI_BYTE, 0, MPI_COMM_WORLD);
   SPLINE[SP_EXT_HUBBLE] = gsl_spline_alloc(gsl_interp_cspline, n);
@@ -1253,6 +1275,7 @@ int read_Pk_from_file(void)
   /* This is adapted from N-GenIC */
 
   int i, oldread = 0;
+  int err = 0;
   FILE *fd;
   double k, p;
   double *logk, *Pk;
@@ -1264,31 +1287,41 @@ int read_Pk_from_file(void)
       printf("ERROR on task 0: can't open input spectrum in file '%s' on task %d\n",
              params.FileWithInputSpectrum, ThisTask);
       fflush(stdout);
-      return 1;
+      err = 1;
     }
 
-    NPowerTable = 0;
-    do
+    if (!err)
     {
-      if (fscanf(fd, " %lg %lg ", &k, &p) == 2)
-        NPowerTable++;
+      NPowerTable = 0;
+      do
+      {
+        if (fscanf(fd, " %lg %lg ", &k, &p) == 2)
+          NPowerTable++;
+        else
+          break;
+      } while (1);
+
+      fclose(fd);
+
+      if (!NPowerTable)
+      {
+        printf("ERROR on task 0: can't read data from input spectrum in file '%s'\n",
+               params.FileWithInputSpectrum);
+        fflush(stdout);
+        err = 1;
+      }
       else
-        break;
-    } while (1);
-
-    fclose(fd);
-
-    if (!NPowerTable)
-    {
-      printf("ERROR on task 0: can't read data from input spectrum in file '%s'\n",
-             params.FileWithInputSpectrum);
-      fflush(stdout);
-      return 1;
+      {
+        printf("Found %d pairs of values in input spectrum table\n", NPowerTable);
+        fflush(stdout);
+      }
     }
-
-    printf("Found %d pairs of values in input spectrum table\n", NPowerTable);
-    fflush(stdout);
   }
+
+  /* all tasks agree on success/failure before proceeding to broadcasts */
+  MPI_Bcast(&err, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  if (err)
+    return 1;
 
   /* Task 0 communicates the number of lines to all tasks */
   MPI_Bcast(&NPowerTable, sizeof(int), MPI_BYTE, 0, MPI_COMM_WORLD);

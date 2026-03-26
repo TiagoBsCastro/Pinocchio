@@ -166,7 +166,7 @@ int read_power_table_from_CAMB()
     /* all tasks agree on success/failure before proceeding to data broadcasts */
     MPI_Bcast(&err, 1, MPI_INT, 0, MPI_COMM_WORLD);
     if (err)
-        return 1;
+        goto fail_arrays;
 
     /* broadcast of loaded and computed quantities */
     MPI_Bcast(StoredLogK, params.camb.Nkbins, MPI_DOUBLE, 0, MPI_COMM_WORLD);
@@ -190,6 +190,15 @@ int read_power_table_from_CAMB()
     params.camb.RefGM = RefGrowingMode;
 
     return 0;
+
+fail_arrays:
+    free(RefGrowingMode);
+    free(CAMBScalefac);
+    free(CAMBRedshifts);
+    free(StoredLogK);
+    free(StoredLogTotalPowerSpectrum);
+
+    return 1;
 }
 
 int initialize_ScaleDependentGrowth(void)
