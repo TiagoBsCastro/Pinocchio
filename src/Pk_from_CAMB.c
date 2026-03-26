@@ -328,6 +328,55 @@ int initialize_ScaleDependentGrowth(void)
 fail:
     gsl_spline_free(spline);
     gsl_interp_accel_free(accel);
+    spline = NULL;
+    accel = NULL;
+
+    /* free per-radius spline objects (partially initialized on failure) */
+    if (splineGrowMatter)
+    {
+        for (i = 0; i < Smoothing.Nsmooth; i++)
+            if (splineGrowMatter[i])
+                gsl_spline_free(splineGrowMatter[i]);
+        free(splineGrowMatter);
+        splineGrowMatter = NULL;
+    }
+    if (splineGrowVel)
+    {
+        for (i = 0; i < Smoothing.Nsmooth; i++)
+            if (splineGrowVel[i])
+                gsl_spline_free(splineGrowVel[i]);
+        free(splineGrowVel);
+        splineGrowVel = NULL;
+    }
+    if (splineInvGrowMatter)
+    {
+        for (i = 0; i < Smoothing.Nsmooth; i++)
+            if (splineInvGrowMatter[i])
+                gsl_spline_free(splineInvGrowMatter[i]);
+        free(splineInvGrowMatter);
+        splineInvGrowMatter = NULL;
+    }
+    if (splineFomega)
+    {
+        for (i = 0; i < Smoothing.Nsmooth; i++)
+            if (splineFomega[i])
+                gsl_spline_free(splineFomega[i]);
+        free(splineFomega);
+        splineFomega = NULL;
+    }
+    if (splineFomega2)
+    {
+        for (i = 0; i < Smoothing.Nsmooth; i++)
+            if (splineFomega2[i])
+                gsl_spline_free(splineFomega2[i]);
+        free(splineFomega2);
+        splineFomega2 = NULL;
+    }
+    if (accelGrow)
+    {
+        gsl_interp_accel_free(accelGrow);
+        accelGrow = NULL;
+    }
 
     free(ThisfO2);
     free(ThisfO);

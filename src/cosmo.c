@@ -182,6 +182,11 @@ int initialize_cosmology()
 
   gsl_function Function_cosmo;
 
+  /* ODE objects: hoisted to function scope so the fail label can free them */
+  gsl_odeiv2_step *ode_s = NULL;
+  gsl_odeiv2_control *ode_c = NULL;
+  gsl_odeiv2_evolve *ode_e = NULL;
+
 #ifdef MOD_GRAV_FR
   H_over_c = 100. / SPEEDOFLIGHT;
 #endif
@@ -276,9 +281,9 @@ int initialize_cosmology()
   {
     /* Runge-Kutta integration of cosmic time and growth rate */
     const gsl_odeiv2_step_type *T = gsl_odeiv2_step_rkf45;
-    gsl_odeiv2_step *ode_s = gsl_odeiv2_step_alloc(T, NVAR);
-    gsl_odeiv2_control *ode_c = gsl_odeiv2_control_standard_new(1.0e-8, 1.0e-8, 1.0, 1.0);
-    gsl_odeiv2_evolve *ode_e = gsl_odeiv2_evolve_alloc(NVAR);
+    ode_s = gsl_odeiv2_step_alloc(T, NVAR);
+    ode_c = gsl_odeiv2_control_standard_new(1.0e-8, 1.0e-8, 1.0, 1.0);
+    ode_e = gsl_odeiv2_evolve_alloc(NVAR);
     gsl_odeiv2_system ode_sys = {system_of_ODEs, jac, NVAR, (void *)&ode_param};
 
     /* ICs for the runge-kutta integration */
@@ -384,6 +389,13 @@ int initialize_cosmology()
       grow31[i] /= norm * norm * norm;
       grow32[i] /= norm * norm * norm;
     }
+
+    gsl_odeiv2_evolve_free(ode_e);
+    gsl_odeiv2_control_free(ode_c);
+    gsl_odeiv2_step_free(ode_s);
+    ode_e = NULL;
+    ode_c = NULL;
+    ode_s = NULL;
   }
 #ifdef READ_PK_TABLE
   else
@@ -393,9 +405,9 @@ int initialize_cosmology()
 
     /* in this case the integration is limited only to the cosmic time */
     const gsl_odeiv2_step_type *T = gsl_odeiv2_step_rkf45;
-    gsl_odeiv2_step *ode_s = gsl_odeiv2_step_alloc(T, 1);
-    gsl_odeiv2_control *ode_c = gsl_odeiv2_control_standard_new(1.0e-8, 1.0e-8, 1.0, 1.0);
-    gsl_odeiv2_evolve *ode_e = gsl_odeiv2_evolve_alloc(1);
+    ode_s = gsl_odeiv2_step_alloc(T, 1);
+    ode_c = gsl_odeiv2_control_standard_new(1.0e-8, 1.0e-8, 1.0, 1.0);
+    ode_e = gsl_odeiv2_evolve_alloc(1);
     gsl_odeiv2_system ode_sys = {system_of_ODEs_small, jac, 1, (void *)&ode_param};
 
     /* ICs for the runge-kutta integration of the cosmic time only */
@@ -459,6 +471,13 @@ int initialize_cosmology()
     /* the growth rates are set by reading the CAMB power spectra */
     if (read_Pk_table_from_CAMB(scalef, grow1, grow2, grow31, grow32, fomega1, fomega2, fomega31, fomega32))
       goto fail;
+
+    gsl_odeiv2_evolve_free(ode_e);
+    gsl_odeiv2_control_free(ode_c);
+    gsl_odeiv2_step_free(ode_s);
+    ode_e = NULL;
+    ode_c = NULL;
+    ode_s = NULL;
   }
 #endif
 
@@ -692,6 +711,12 @@ int initialize_cosmology()
   return 0;
 
 fail:
+  if (ode_e)
+    gsl_odeiv2_evolve_free(ode_e);
+  if (ode_c)
+    gsl_odeiv2_control_free(ode_c);
+  if (ode_s)
+    gsl_odeiv2_step_free(ode_s);
   free(fomega32);
   free(fomega31);
   free(fomega2);
