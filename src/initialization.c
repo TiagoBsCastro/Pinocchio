@@ -1837,7 +1837,10 @@ int set_scaledep_GM()
       char lbl[64];
       snprintf(lbl, sizeof(lbl), "SPLINE_INVGROW[%d]", ismooth);
       if (checked_spline_init(SPLINE_INVGROW[ismooth], vector, &(SPLINE[SP_TIME]->x[0]), NBINS, lbl))
+      {
+        free(vector);
         return 1;
+      }
     }
 #endif
   }

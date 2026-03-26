@@ -231,7 +231,11 @@ int initialize_cosmology()
     }
 
     if (checked_spline_init(SPLINE[SP_INTEOS], scalef, IntEoS, NBINS, "SP_INTEOS"))
+    {
+      free(IntEoS);
+      free(scalef);
       return 1;
+    }
 
     free(IntEoS);
     free(scalef);
@@ -316,7 +320,7 @@ int initialize_cosmology()
         {
           printf("ERROR on task %d: integration of cosmological quantities failed\n", ThisTask);
           fflush(stdout);
-          return 1;
+          goto fail;
         }
       }
 
@@ -419,7 +423,7 @@ int initialize_cosmology()
         {
           printf("ERROR on task %d: integration of cosmological quantities failed\n", ThisTask);
           fflush(stdout);
-          return 1;
+          goto fail;
         }
       }
 
@@ -454,7 +458,7 @@ int initialize_cosmology()
 
     /* the growth rates are set by reading the CAMB power spectra */
     if (read_Pk_table_from_CAMB(scalef, grow1, grow2, grow31, grow32, fomega1, fomega2, fomega31, fomega32))
-      return 1;
+      goto fail;
   }
 #endif
 
@@ -477,36 +481,36 @@ int initialize_cosmology()
       checked_spline_init(SPLINE[SP_DIAMDIST], scalef, diamdist, NBINS - NBB, "SP_DIAMDIST") ||
       /* inverse grow is always defined on the first growth rate */
       checked_spline_init(SPLINE[SP_INVGROW], grow1, scalef, NBINS, "SP_INVGROW"))
-    return 1;
+    goto fail;
 
   for (j = 0; j < NkBINS; j++)
   {
     char lbl[64];
     snprintf(lbl, sizeof(lbl), "SP_GROW1[%d]", j);
     if (checked_spline_init(SPLINE[SP_GROW1 + j], scalef, grow1 + j * NBINS, NBINS, lbl))
-      return 1;
+      goto fail;
     snprintf(lbl, sizeof(lbl), "SP_GROW2[%d]", j);
     if (checked_spline_init(SPLINE[SP_GROW2 + j], scalef, grow2 + j * NBINS, NBINS, lbl))
-      return 1;
+      goto fail;
     snprintf(lbl, sizeof(lbl), "SP_GROW31[%d]", j);
     if (checked_spline_init(SPLINE[SP_GROW31 + j], scalef, grow31 + j * NBINS, NBINS, lbl))
-      return 1;
+      goto fail;
     snprintf(lbl, sizeof(lbl), "SP_GROW32[%d]", j);
     if (checked_spline_init(SPLINE[SP_GROW32 + j], scalef, grow32 + j * NBINS, NBINS, lbl))
-      return 1;
+      goto fail;
 
     snprintf(lbl, sizeof(lbl), "SP_FOMEGA1[%d]", j);
     if (checked_spline_init(SPLINE[SP_FOMEGA1 + j], scalef, fomega1 + j * NBINS, NBINS, lbl))
-      return 1;
+      goto fail;
     snprintf(lbl, sizeof(lbl), "SP_FOMEGA2[%d]", j);
     if (checked_spline_init(SPLINE[SP_FOMEGA2 + j], scalef, fomega2 + j * NBINS, NBINS, lbl))
-      return 1;
+      goto fail;
     snprintf(lbl, sizeof(lbl), "SP_FOMEGA31[%d]", j);
     if (checked_spline_init(SPLINE[SP_FOMEGA31 + j], scalef, fomega31 + j * NBINS, NBINS, lbl))
-      return 1;
+      goto fail;
     snprintf(lbl, sizeof(lbl), "SP_FOMEGA32[%d]", j);
     if (checked_spline_init(SPLINE[SP_FOMEGA32 + j], scalef, fomega32 + j * NBINS, NBINS, lbl))
-      return 1;
+      goto fail;
   }
 
   /* deallocation of vectors for interpolation */
@@ -686,6 +690,21 @@ int initialize_cosmology()
 #endif
 
   return 0;
+
+fail:
+  free(fomega32);
+  free(fomega31);
+  free(fomega2);
+  free(fomega1);
+  free(grow32);
+  free(grow31);
+  free(grow2);
+  free(grow1);
+  free(diamdist);
+  free(comvdist);
+  free(cosmtime);
+  free(scalef);
+  return 1;
 }
 
 #ifdef MOD_GRAV_FR
@@ -951,7 +970,11 @@ int read_TabulatedEoS(void)
   MPI_Bcast(EoS, NtabEoS * sizeof(double), MPI_BYTE, 0, MPI_COMM_WORLD);
 
   if (checked_spline_init(SPLINE[SP_EOS], scalef, EoS, NtabEoS, "SP_EOS"))
+  {
+    free(EoS);
+    free(scalef);
     return 1;
+  }
 
   free(EoS);
   free(scalef);
@@ -1300,7 +1323,11 @@ int read_Pk_from_file(void)
   MPI_Bcast(logk, NPowerTable * sizeof(double), MPI_BYTE, 0, MPI_COMM_WORLD);
 
   if (checked_spline_init(SPLINE[SP_PK], logk, Pk, NPowerTable, "SP_PK (from file)"))
+  {
+    free(Pk);
+    free(logk);
     return 1;
+  }
 
   free(Pk);
   free(logk);
@@ -1384,7 +1411,7 @@ int read_Pk_table_from_CAMB(double *scalef, double *grow1, double *grow2, double
     if ((fd = fopen(params.camb.RedshiftsFile, "r")) == 0x0)
     {
       printf("Error: Redshift file %s not found\n", params.camb.RedshiftsFile);
-      return 1;
+      goto fail_arrays;
     }
     for (i = 0; i < params.camb.NCAMB; i++)
       fscanf(fd, "%d %lf", &dummy, CAMBScalefac + i);
@@ -1393,7 +1420,7 @@ int read_Pk_table_from_CAMB(double *scalef, double *grow1, double *grow2, double
     if (CAMBScalefac[params.camb.NCAMB - 1] != 0.0)
     {
       printf("ERROR on Task 0: last CAMB redshift must be 0.0\n");
-      return 1;
+      goto fail_arrays;
     }
     for (i = 0; i < params.camb.NCAMB; i++)
       CAMBScalefac[i] = 1. / (1. + CAMBScalefac[i]);
@@ -1434,7 +1461,7 @@ int read_Pk_table_from_CAMB(double *scalef, double *grow1, double *grow2, double
       printf("       while the growth rate is requested from k=%10g to k=%10g 1/Mpc\n",
              pow(10., LOGKMIN), pow(10., LOGKMIN + DELTALOGK * (NkBINS - 1)));
       printf("       please extend the k range in CAMB or fix LOGKMIN, DELTALOGK and NkBINS in def_splines.h\n");
-      return 1;
+      goto fail_arrays;
     }
   }
 
@@ -1446,7 +1473,7 @@ int read_Pk_table_from_CAMB(double *scalef, double *grow1, double *grow2, double
 
   /* spline of P(k) at z=0 (stored as log10[k^3 P]) */
   if (checked_spline_init(SPLINE[SP_PK], logk, Pk, NPowerTable, "SP_PK (from CAMB)"))
-    return 1;
+    goto fail_arrays;
 
   /* 2D spline for growth(a,k) defined via lingrow(a,k) */
   const gsl_interp2d_type *T = gsl_interp2d_bicubic;
@@ -1454,7 +1481,7 @@ int read_Pk_table_from_CAMB(double *scalef, double *grow1, double *grow2, double
   gsl_interp_accel *yacc = gsl_interp_accel_alloc();
   gsl_spline2d *AnotherSpline = gsl_spline2d_alloc(T, params.camb.NCAMB, NPowerTable);
   if (checked_spline2d_init(AnotherSpline, CAMBScalefac, logk, lingrow, params.camb.NCAMB, NPowerTable, "CAMB growth(a,k)"))
-    return 1;
+    goto fail_all;
 
   /* first usable time index within CAMB range */
   for (First = 0; First < NBINS && scalef[First] < CAMBScalefac[0]; First++)
@@ -1547,6 +1574,17 @@ int read_Pk_table_from_CAMB(double *scalef, double *grow1, double *grow2, double
   free(logk);
 
   return 0;
+
+fail_all:
+  gsl_spline2d_free(AnotherSpline);
+  gsl_interp_accel_free(yacc);
+  gsl_interp_accel_free(xacc);
+fail_arrays:
+  free(lingrow);
+  free(CAMBScalefac);
+  free(Pk);
+  free(logk);
+  return 1;
 }
 #endif
 
@@ -2161,6 +2199,9 @@ double InverseComovingDistance(double chi)
           ACCEL_INVCOMVDIST = gsl_interp_accel_alloc();
           if (checked_spline_init(SPLINE_INVCOMVDIST, xchi_use, alog_use, n_use, "INVCOMVDIST"))
           {
+            /* MPI_Abort is used here because InverseComovingDistance returns double
+               and is called from hot loops, so there is no way to propagate an
+               int-style error code back to the caller. */
             printf("FATAL on task %d: cannot build inverse comoving distance spline\n", ThisTask);
             fflush(stdout);
             MPI_Abort(MPI_COMM_WORLD, 1);

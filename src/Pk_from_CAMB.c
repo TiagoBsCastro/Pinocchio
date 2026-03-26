@@ -253,13 +253,13 @@ int initialize_ScaleDependentGrowth(void)
             char lbl[64];
             snprintf(lbl, sizeof(lbl), "splineGrowMatter[%d]", ThisRadius);
             if (checked_spline_init(splineGrowMatter[ThisRadius], CAMBScalefac, ThisMatter, params.camb.NCAMB, lbl))
-                return 1;
+                goto fail;
             snprintf(lbl, sizeof(lbl), "splineGrowVel[%d]", ThisRadius);
             if (checked_spline_init(splineGrowVel[ThisRadius], CAMBScalefac, ThisVel, params.camb.NCAMB, lbl))
-                return 1;
+                goto fail;
             snprintf(lbl, sizeof(lbl), "splineInvGrowMatter[%d]", ThisRadius);
             if (checked_spline_init(splineInvGrowMatter[ThisRadius], ThisMatter, CAMBScalefac, params.camb.NCAMB, lbl))
-                return 1;
+                goto fail;
         }
 
         /* fomega */
@@ -301,10 +301,10 @@ int initialize_ScaleDependentGrowth(void)
             char lbl[64];
             snprintf(lbl, sizeof(lbl), "splineFomega[%d]", ThisRadius);
             if (checked_spline_init(splineFomega[ThisRadius], CAMBScalefac, ThisfO, params.camb.NCAMB, lbl))
-                return 1;
+                goto fail;
             snprintf(lbl, sizeof(lbl), "splineFomega2[%d]", ThisRadius);
             if (checked_spline_init(splineFomega2[ThisRadius], CAMBScalefac, ThisfO2, params.camb.NCAMB, lbl))
-                return 1;
+                goto fail;
         }
     }
 
@@ -324,6 +324,19 @@ int initialize_ScaleDependentGrowth(void)
     free(VarMatter);
 
     return 0;
+
+fail:
+    gsl_spline_free(spline);
+    gsl_interp_accel_free(accel);
+
+    free(ThisfO2);
+    free(ThisfO);
+    free(ThisVel);
+    free(ThisMatter);
+    free(VarVel);
+    free(VarMatter);
+
+    return 1;
 }
 
 double IntegrandForSDMassVariance(double logk, void *param)
@@ -354,10 +367,15 @@ double PowerFromCAMB(double k)
     /* initialize gsl spline the first time the function is called, or when output changes */
     if (spline == 0x0 || ThisOutput != LastOutput)
     {
+        char lbl[64];
+        snprintf(lbl, sizeof(lbl), "spline_PowerFromCAMB[output=%d]", ThisOutput);
         if (checked_spline_init(spline, StoredLogK,
                                 StoredLogTotalPowerSpectrum + ThisOutput * params.camb.Nkbins,
-                                params.camb.Nkbins, "spline_PowerFromCAMB"))
+                                params.camb.Nkbins, lbl))
         {
+            /* MPI_Abort is used here because PowerFromCAMB returns double and is called
+               deep inside GSL integration loops, so there is no way to propagate an
+               int-style error code back to the caller. */
             printf("FATAL on task %d: PowerFromCAMB spline init failed for output %d\n", ThisTask, ThisOutput);
             fflush(stdout);
             MPI_Abort(MPI_COMM_WORLD, 1);
