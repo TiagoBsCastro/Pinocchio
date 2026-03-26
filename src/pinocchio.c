@@ -256,6 +256,8 @@ int main(int argc, char **argv, char **envp)
 void abort_code(void)
 {
   printf("Task %d aborting...\n", ThisTask);
+  fflush(stdout);
+  fflush(stderr);
   MPI_Abort(MPI_COMM_WORLD, 1);
 }
 
