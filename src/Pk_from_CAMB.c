@@ -249,9 +249,18 @@ int initialize_ScaleDependentGrowth(void)
             ThisVel[ThisOutput] = sqrt(result / VarVel[ThisRadius]);
         }
         /* initialization of splines */
-        checked_spline_init(splineGrowMatter[ThisRadius], CAMBScalefac, ThisMatter, params.camb.NCAMB, "splineGrowMatter");
-        checked_spline_init(splineGrowVel[ThisRadius], CAMBScalefac, ThisVel, params.camb.NCAMB, "splineGrowVel");
-        checked_spline_init(splineInvGrowMatter[ThisRadius], ThisMatter, CAMBScalefac, params.camb.NCAMB, "splineInvGrowMatter");
+        {
+            char lbl[64];
+            snprintf(lbl, sizeof(lbl), "splineGrowMatter[%d]", ThisRadius);
+            if (checked_spline_init(splineGrowMatter[ThisRadius], CAMBScalefac, ThisMatter, params.camb.NCAMB, lbl))
+                return 1;
+            snprintf(lbl, sizeof(lbl), "splineGrowVel[%d]", ThisRadius);
+            if (checked_spline_init(splineGrowVel[ThisRadius], CAMBScalefac, ThisVel, params.camb.NCAMB, lbl))
+                return 1;
+            snprintf(lbl, sizeof(lbl), "splineInvGrowMatter[%d]", ThisRadius);
+            if (checked_spline_init(splineInvGrowMatter[ThisRadius], ThisMatter, CAMBScalefac, params.camb.NCAMB, lbl))
+                return 1;
+        }
 
         /* fomega */
         for (ThisOutput = 0; ThisOutput < params.camb.NCAMB; ThisOutput++)
@@ -288,8 +297,15 @@ int initialize_ScaleDependentGrowth(void)
 #endif
         }
         /* initialization of splines */
-        checked_spline_init(splineFomega[ThisRadius], CAMBScalefac, ThisfO, params.camb.NCAMB, "splineFomega");
-        checked_spline_init(splineFomega2[ThisRadius], CAMBScalefac, ThisfO2, params.camb.NCAMB, "splineFomega2");
+        {
+            char lbl[64];
+            snprintf(lbl, sizeof(lbl), "splineFomega[%d]", ThisRadius);
+            if (checked_spline_init(splineFomega[ThisRadius], CAMBScalefac, ThisfO, params.camb.NCAMB, lbl))
+                return 1;
+            snprintf(lbl, sizeof(lbl), "splineFomega2[%d]", ThisRadius);
+            if (checked_spline_init(splineFomega2[ThisRadius], CAMBScalefac, ThisfO2, params.camb.NCAMB, lbl))
+                return 1;
+        }
     }
 
 #ifdef OUTPUT_GM
@@ -338,9 +354,14 @@ double PowerFromCAMB(double k)
     /* initialize gsl spline the first time the function is called, or when output changes */
     if (spline == 0x0 || ThisOutput != LastOutput)
     {
-        checked_spline_init(spline, StoredLogK,
-                            StoredLogTotalPowerSpectrum + ThisOutput * params.camb.Nkbins,
-                            params.camb.Nkbins, "spline_PowerFromCAMB");
+        if (checked_spline_init(spline, StoredLogK,
+                                StoredLogTotalPowerSpectrum + ThisOutput * params.camb.Nkbins,
+                                params.camb.Nkbins, "spline_PowerFromCAMB"))
+        {
+            printf("FATAL on task %d: PowerFromCAMB spline init failed for output %d\n", ThisTask, ThisOutput);
+            fflush(stdout);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
     }
 
     LastOutput = ThisOutput;

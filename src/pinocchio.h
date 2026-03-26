@@ -40,6 +40,7 @@
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_odeiv2.h>
 #include <gsl/gsl_spline.h>
+#include <gsl/gsl_spline2d.h>
 #include <fftw3-mpi.h>
 #include <pfft.h>
 #ifdef _OPENMP
@@ -598,6 +599,7 @@ int write_timeless_snapshot(void);
 
 /* prototypes for functions defined in cosmo.c */
 int checked_spline_init(gsl_spline *, const double[], const double[], size_t, const char *);
+int checked_spline2d_init(gsl_spline2d *, const double[], const double[], const double[], size_t, size_t, const char *);
 int initialize_cosmology();
 int initialize_MassVariance();
 double OmegaMatter(double);

@@ -1111,7 +1111,10 @@ int initialize_collapse_times(int ismooth, int onlycompute)
 	{
 		for (int j = 0; j < CT_NBINS_XY; ++j)
 		{
-			checked_spline_init(CT_Spline[i][j], delta_vector, &CT_table[i * CT_NBINS_D + j * CT_NBINS_D * CT_NBINS_XY], CT_NBINS_D, "CT_Spline");
+			char lbl[64];
+			snprintf(lbl, sizeof(lbl), "CT_Spline[%d][%d]", i, j);
+			if (checked_spline_init(CT_Spline[i][j], delta_vector, &CT_table[i * CT_NBINS_D + j * CT_NBINS_D * CT_NBINS_XY], CT_NBINS_D, lbl))
+				return 1;
 		}
 	}
 

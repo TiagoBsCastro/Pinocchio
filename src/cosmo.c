@@ -36,6 +36,13 @@
 int checked_spline_init(gsl_spline *spline, const double xa[], const double ya[],
                         size_t size, const char *label)
 {
+  if (size < 2)
+  {
+    printf("ERROR on task %d: spline \"%s\" requires at least 2 points, got %zu\n",
+           ThisTask, label, size);
+    fflush(stdout);
+    return 1;
+  }
   for (size_t i = 1; i < size; i++)
     if (xa[i] <= xa[i - 1])
     {
@@ -45,7 +52,55 @@ int checked_spline_init(gsl_spline *spline, const double xa[], const double ya[]
       fflush(stdout);
       return 1;
     }
-  return gsl_spline_init(spline, xa, ya, size);
+  int gsl_ret = gsl_spline_init(spline, xa, ya, size);
+  if (gsl_ret)
+  {
+    printf("ERROR on task %d: gsl_spline_init failed for spline \"%s\" (GSL error %d)\n",
+           ThisTask, label, gsl_ret);
+    fflush(stdout);
+  }
+  return gsl_ret;
+}
+
+/* Wrapper around gsl_spline2d_init that checks strict monotonicity of
+   both x and y arrays and prints diagnostics identifying the offending spline. */
+int checked_spline2d_init(gsl_spline2d *spline, const double xa[], const double ya[],
+                          const double za[], size_t xsize, size_t ysize, const char *label)
+{
+  if (xsize < 2 || ysize < 2)
+  {
+    printf("ERROR on task %d: 2D spline \"%s\" requires at least 2 points per axis, "
+           "got xsize=%zu ysize=%zu\n",
+           ThisTask, label, xsize, ysize);
+    fflush(stdout);
+    return 1;
+  }
+  for (size_t i = 1; i < xsize; i++)
+    if (xa[i] <= xa[i - 1])
+    {
+      printf("ERROR on task %d: x values not strictly increasing in 2D spline \"%s\" "
+             "at index %zu: x[%zu]=%.15g  x[%zu]=%.15g\n",
+             ThisTask, label, i, i - 1, xa[i - 1], i, xa[i]);
+      fflush(stdout);
+      return 1;
+    }
+  for (size_t i = 1; i < ysize; i++)
+    if (ya[i] <= ya[i - 1])
+    {
+      printf("ERROR on task %d: y values not strictly increasing in 2D spline \"%s\" "
+             "at index %zu: y[%zu]=%.15g  y[%zu]=%.15g\n",
+             ThisTask, label, i, i - 1, ya[i - 1], i, ya[i]);
+      fflush(stdout);
+      return 1;
+    }
+  int gsl_ret = gsl_spline2d_init(spline, xa, ya, za, xsize, ysize);
+  if (gsl_ret)
+  {
+    printf("ERROR on task %d: gsl_spline2d_init failed for 2D spline \"%s\" (GSL error %d)\n",
+           ThisTask, label, gsl_ret);
+    fflush(stdout);
+  }
+  return gsl_ret;
 }
 
 /* Lazy-built inverse comoving-distance spline: chi [Mpc] -> log10(a) */
@@ -175,7 +230,8 @@ int initialize_cosmology()
       IntEoS[i] = result;
     }
 
-    checked_spline_init(SPLINE[SP_INTEOS], scalef, IntEoS, NBINS, "SP_INTEOS");
+    if (checked_spline_init(SPLINE[SP_INTEOS], scalef, IntEoS, NBINS, "SP_INTEOS"))
+      return 1;
 
     free(IntEoS);
     free(scalef);
@@ -415,24 +471,42 @@ int initialize_cosmology()
     }
 
   /* initialization of spline interpolations of time-dependent quantities */
-  checked_spline_init(SPLINE[SP_TIME], scalef, cosmtime, NBINS, "SP_TIME");
-  checked_spline_init(SPLINE[SP_INVTIME], cosmtime, scalef, NBINS, "SP_INVTIME");
-  checked_spline_init(SPLINE[SP_COMVDIST], scalef, comvdist, NBINS - NBB, "SP_COMVDIST");
-  checked_spline_init(SPLINE[SP_DIAMDIST], scalef, diamdist, NBINS - NBB, "SP_DIAMDIST");
-  /* inverse grow is always defined on the first growth rate */
-  checked_spline_init(SPLINE[SP_INVGROW], grow1, scalef, NBINS, "SP_INVGROW");
+  if (checked_spline_init(SPLINE[SP_TIME], scalef, cosmtime, NBINS, "SP_TIME") ||
+      checked_spline_init(SPLINE[SP_INVTIME], cosmtime, scalef, NBINS, "SP_INVTIME") ||
+      checked_spline_init(SPLINE[SP_COMVDIST], scalef, comvdist, NBINS - NBB, "SP_COMVDIST") ||
+      checked_spline_init(SPLINE[SP_DIAMDIST], scalef, diamdist, NBINS - NBB, "SP_DIAMDIST") ||
+      /* inverse grow is always defined on the first growth rate */
+      checked_spline_init(SPLINE[SP_INVGROW], grow1, scalef, NBINS, "SP_INVGROW"))
+    return 1;
 
   for (j = 0; j < NkBINS; j++)
   {
-    checked_spline_init(SPLINE[SP_GROW1 + j], scalef, grow1 + j * NBINS, NBINS, "SP_GROW1");
-    checked_spline_init(SPLINE[SP_GROW2 + j], scalef, grow2 + j * NBINS, NBINS, "SP_GROW2");
-    checked_spline_init(SPLINE[SP_GROW31 + j], scalef, grow31 + j * NBINS, NBINS, "SP_GROW31");
-    checked_spline_init(SPLINE[SP_GROW32 + j], scalef, grow32 + j * NBINS, NBINS, "SP_GROW32");
+    char lbl[64];
+    snprintf(lbl, sizeof(lbl), "SP_GROW1[%d]", j);
+    if (checked_spline_init(SPLINE[SP_GROW1 + j], scalef, grow1 + j * NBINS, NBINS, lbl))
+      return 1;
+    snprintf(lbl, sizeof(lbl), "SP_GROW2[%d]", j);
+    if (checked_spline_init(SPLINE[SP_GROW2 + j], scalef, grow2 + j * NBINS, NBINS, lbl))
+      return 1;
+    snprintf(lbl, sizeof(lbl), "SP_GROW31[%d]", j);
+    if (checked_spline_init(SPLINE[SP_GROW31 + j], scalef, grow31 + j * NBINS, NBINS, lbl))
+      return 1;
+    snprintf(lbl, sizeof(lbl), "SP_GROW32[%d]", j);
+    if (checked_spline_init(SPLINE[SP_GROW32 + j], scalef, grow32 + j * NBINS, NBINS, lbl))
+      return 1;
 
-    checked_spline_init(SPLINE[SP_FOMEGA1 + j], scalef, fomega1 + j * NBINS, NBINS, "SP_FOMEGA1");
-    checked_spline_init(SPLINE[SP_FOMEGA2 + j], scalef, fomega2 + j * NBINS, NBINS, "SP_FOMEGA2");
-    checked_spline_init(SPLINE[SP_FOMEGA31 + j], scalef, fomega31 + j * NBINS, NBINS, "SP_FOMEGA31");
-    checked_spline_init(SPLINE[SP_FOMEGA32 + j], scalef, fomega32 + j * NBINS, NBINS, "SP_FOMEGA32");
+    snprintf(lbl, sizeof(lbl), "SP_FOMEGA1[%d]", j);
+    if (checked_spline_init(SPLINE[SP_FOMEGA1 + j], scalef, fomega1 + j * NBINS, NBINS, lbl))
+      return 1;
+    snprintf(lbl, sizeof(lbl), "SP_FOMEGA2[%d]", j);
+    if (checked_spline_init(SPLINE[SP_FOMEGA2 + j], scalef, fomega2 + j * NBINS, NBINS, lbl))
+      return 1;
+    snprintf(lbl, sizeof(lbl), "SP_FOMEGA31[%d]", j);
+    if (checked_spline_init(SPLINE[SP_FOMEGA31 + j], scalef, fomega31 + j * NBINS, NBINS, lbl))
+      return 1;
+    snprintf(lbl, sizeof(lbl), "SP_FOMEGA32[%d]", j);
+    if (checked_spline_init(SPLINE[SP_FOMEGA32 + j], scalef, fomega32 + j * NBINS, NBINS, lbl))
+      return 1;
   }
 
   /* deallocation of vectors for interpolation */
@@ -876,7 +950,8 @@ int read_TabulatedEoS(void)
   MPI_Bcast(scalef, NtabEoS * sizeof(double), MPI_BYTE, 0, MPI_COMM_WORLD);
   MPI_Bcast(EoS, NtabEoS * sizeof(double), MPI_BYTE, 0, MPI_COMM_WORLD);
 
-  checked_spline_init(SPLINE[SP_EOS], scalef, EoS, NtabEoS, "SP_EOS");
+  if (checked_spline_init(SPLINE[SP_EOS], scalef, EoS, NtabEoS, "SP_EOS"))
+    return 1;
 
   free(EoS);
   free(scalef);
@@ -962,7 +1037,12 @@ int read_TabulatedHubble(void)
   MPI_Bcast(ax, n * sizeof(double), MPI_BYTE, 0, MPI_COMM_WORLD);
   MPI_Bcast(Hz, n * sizeof(double), MPI_BYTE, 0, MPI_COMM_WORLD);
 
-  checked_spline_init(SPLINE[SP_EXT_HUBBLE], ax, Hz, n, "SP_EXT_HUBBLE");
+  if (checked_spline_init(SPLINE[SP_EXT_HUBBLE], ax, Hz, n, "SP_EXT_HUBBLE"))
+  {
+    free(Hz);
+    free(ax);
+    return 1;
+  }
   free(Hz);
   free(ax);
   return 0;
@@ -1219,7 +1299,8 @@ int read_Pk_from_file(void)
   MPI_Bcast(Pk, NPowerTable * sizeof(double), MPI_BYTE, 0, MPI_COMM_WORLD);
   MPI_Bcast(logk, NPowerTable * sizeof(double), MPI_BYTE, 0, MPI_COMM_WORLD);
 
-  checked_spline_init(SPLINE[SP_PK], logk, Pk, NPowerTable, "SP_PK (from file)");
+  if (checked_spline_init(SPLINE[SP_PK], logk, Pk, NPowerTable, "SP_PK (from file)"))
+    return 1;
 
   free(Pk);
   free(logk);
@@ -1364,14 +1445,16 @@ int read_Pk_table_from_CAMB(double *scalef, double *grow1, double *grow2, double
   MPI_Bcast(lingrow, params.camb.NCAMB * NPowerTable, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
   /* spline of P(k) at z=0 (stored as log10[k^3 P]) */
-  checked_spline_init(SPLINE[SP_PK], logk, Pk, NPowerTable, "SP_PK (from CAMB)");
+  if (checked_spline_init(SPLINE[SP_PK], logk, Pk, NPowerTable, "SP_PK (from CAMB)"))
+    return 1;
 
   /* 2D spline for growth(a,k) defined via lingrow(a,k) */
   const gsl_interp2d_type *T = gsl_interp2d_bicubic;
   gsl_interp_accel *xacc = gsl_interp_accel_alloc();
   gsl_interp_accel *yacc = gsl_interp_accel_alloc();
   gsl_spline2d *AnotherSpline = gsl_spline2d_alloc(T, params.camb.NCAMB, NPowerTable);
-  gsl_spline2d_init(AnotherSpline, CAMBScalefac, logk, lingrow, params.camb.NCAMB, NPowerTable);
+  if (checked_spline2d_init(AnotherSpline, CAMBScalefac, logk, lingrow, params.camb.NCAMB, NPowerTable, "CAMB growth(a,k)"))
+    return 1;
 
   /* first usable time index within CAMB range */
   for (First = 0; First < NBINS && scalef[First] < CAMBScalefac[0]; First++)
@@ -1580,10 +1663,11 @@ int initialize_MassVariance(void)
   }
 
   /* initialization of splines for interpolation */
-  checked_spline_init(SPLINE[SP_MASSVAR], rv, massvar, NBINS, "SP_MASSVAR");
-  checked_spline_init(SPLINE[SP_RADIUS], massvarneg, rv, NBINS, "SP_RADIUS");
-  checked_spline_init(SPLINE[SP_DVARDR], rv, dmvdr, NBINS, "SP_DVARDR");
-  checked_spline_init(SPLINE[SP_DISPVAR], rv, displv, NBINS, "SP_DISPVAR");
+  if (checked_spline_init(SPLINE[SP_MASSVAR], rv, massvar, NBINS, "SP_MASSVAR") ||
+      checked_spline_init(SPLINE[SP_RADIUS], massvarneg, rv, NBINS, "SP_RADIUS") ||
+      checked_spline_init(SPLINE[SP_DVARDR], rv, dmvdr, NBINS, "SP_DVARDR") ||
+      checked_spline_init(SPLINE[SP_DISPVAR], rv, displv, NBINS, "SP_DISPVAR"))
+    return 1;
 
   free(displv);
   free(massvarneg);
@@ -2075,7 +2159,12 @@ double InverseComovingDistance(double chi)
           /* Allocate and init inverse spline */
           SPLINE_INVCOMVDIST = gsl_spline_alloc(gsl_interp_cspline, n_use);
           ACCEL_INVCOMVDIST = gsl_interp_accel_alloc();
-          checked_spline_init(SPLINE_INVCOMVDIST, xchi_use, alog_use, n_use, "INVCOMVDIST");
+          if (checked_spline_init(SPLINE_INVCOMVDIST, xchi_use, alog_use, n_use, "INVCOMVDIST"))
+          {
+            printf("FATAL on task %d: cannot build inverse comoving distance spline\n", ThisTask);
+            fflush(stdout);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+          }
 
           if (!ThisTask && internal.verbose_level >= VDBG)
           {
