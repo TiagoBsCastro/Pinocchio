@@ -329,10 +329,9 @@ PLCAxis   1. 1. 0.                  % un-normalized direction of the cone axis
 % CTtableFile  none
 
 # CAMB PK tables, needed if the code is compiled with READ_PK_TABLE
-% CAMBMatterFileTag     matterpower     % label for matter power spectrum files
-% CAMBTransferFileTag   transfer_out    % label for transfer function files
-% CAMBRunName           nilcdm_0.3eV    % name of CAMB run
-% CAMBRedsfhitsFile     inputredshift   % list of redshifts for which the power spectrum is avail
+% CAMBMatterFile       matterpower     % label for CDM+Baryons power spectrum files
+% CAMBRedshiftsFile    inputredshift   % list of redshifts for which the power spectrum is avail
+% HubbleTableFile      hubble.dat      % file with two columns: z  E(z)=H(z)/H0 (dimensionless)
 
 ----------------------------------------------------------------------
 
@@ -364,6 +363,14 @@ Sigma8; in this case the code will not compute the normalization
 constant of the power spectrum. The value of the sigma8 parameter will
 be written in the standard output, so it is easy to check its
 correctness.
+
+When using CAMB-generated power spectra for scale-dependent growth
+(FileWithInputSpectrum = CAMBTable + READ_PK_TABLE), the imported CAMB
+spectrum sets the normalization directly and Sigma8 is not used to
+renormalize it. If a HubbleTableFile is also provided, the user must
+ensure mutual consistency among: Omega0, OmegaLambda, Hubble100, the
+external E(z) = H(z)/H0 table, and the CAMB power-spectrum tables.
+Inconsistent inputs will lead to unphysical results.
 
 Other options in the parameter file:
 
@@ -813,14 +820,14 @@ be added to the parameter file (parameter values are an example):
 
 CAMBMatterFile      CAMBFiles/pk_cb         % label for matter power spectrum files (CDM+Baryons)
 CAMBRedshiftsFile   CAMBFiles/redshifts.dat % list of redshifts for the Pk table
-HubbleTableFile     CAMBFiles/hubble.dat    % Hubble table file
+HubbleTableFile     CAMBFiles/hubble.dat    % file with z and E(z)=H(z)/H0 (dimensionless)
 
-The code reads the power spectra which the user must pass as the Pk of 
-CDM + Baryons; it is adapted to read CAMB outputs but it should be 
-straightforward to adapt the code to read in output from other codes 
-like CLASS. CAMBMatterFileTag is the label added to the files that 
-contain the CDM + Baryons power spectra. CAMBRedsfhitsFile is a file 
-with the list of redshifts (in chronological order) at which CAMB 
+The code reads the power spectra which the user must pass as the Pk of
+CDM + Baryons; it is adapted to read CAMB outputs but it should be
+straightforward to adapt the code to read in output from other codes
+like CLASS. CAMBMatterFile is the label added to the files that
+contain the CDM + Baryons power spectra. CAMBRedshiftsFile is a file
+with the list of redshifts (in chronological order) at which CAMB
 outputs are provided i.e.:
 
 000 highest_z
@@ -830,10 +837,24 @@ outputs are provided i.e.:
   .      .
 *** lowest_z
 
-HubbleTableFile is a file containing the Hubble function, ensuring 
-that, in the case of massive neutrinos, the background evolution is 
-consistent with the P(k) used.
-In the scripts/ directory a PkCamb.py that computes the needed files 
+HubbleTableFile is a two-column ASCII file providing the dimensionless
+expansion rate E(z) = H(z)/H0 as a function of redshift:
+
+  z   E(z)
+
+where E(z) = H(z)/H0 is dimensionless (E(0) = 1 for a consistent
+table). The code reconstructs the physical Hubble parameter internally
+as H(z) = 100 * Hubble100 * E(z) [km/s/Mpc], so the Hubble100
+parameter must still be set correctly in the parameter file.
+
+The purpose of HubbleTableFile is to ensure that the background
+expansion history used by the code is fully consistent with the CAMB
+power spectra provided via CAMBMatterFile. This is especially
+important for massive-neutrino cosmologies, where the background
+evolution cannot be reconstructed from the standard Friedmann equation
+with Omega0, OmegaLambda alone.
+
+In the scripts/ directory a PkCamb.py that computes the needed files
 for running with neutrinos is available.
 
 *****************************************************************

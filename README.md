@@ -43,3 +43,16 @@ mp = hp.read_map('pinocchio.<RunFlag>.massmap.segXXX.fits', partial=True, nest=F
 ```
 
 Note: Pixels are indexed in RING order with the PLC axis at pixel 0 (north pole in the internal PLC basis). For aperture=180 deg the map is full-sky and can be read without `partial=True`.
+
+## External Hubble table for CAMB / scale-dependent runs
+
+When running with scale-dependent growth (massive neutrinos), the code can read an external Hubble table via the `HubbleTableFile` parameter.  The file must contain two whitespace-separated columns:
+
+| Column | Quantity | Unit |
+|--------|----------|------|
+| 1 | redshift `z` | — |
+| 2 | `E(z) = H(z)/H0` | dimensionless |
+
+The second column is the dimensionless expansion rate, **not** `H(z)` in km/s/Mpc.  The code reconstructs the physical Hubble parameter internally as `H(z) = 100 * Hubble100 * E(z)` km/s/Mpc, so `Hubble100` must still be set in the parameter file.
+
+This file is used together with the CAMB `P(k)` tables (see `CAMBMatterFile`) to keep the background expansion history consistent with the input power spectra.
