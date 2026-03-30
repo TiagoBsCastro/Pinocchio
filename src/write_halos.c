@@ -130,6 +130,7 @@ int compute_mf(int iout)
 		default:
 			break;
 		}
+		fprintf(file, "# 7) peak height nu = delta_c / sigma(M,z), with delta_c = 1.686\n");
 		fprintf(file, "#\n");
 
 		for (i = 0; i < mf.NBIN; i++)

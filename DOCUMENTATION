@@ -530,9 +530,21 @@ OutputInH100):
 # 4) lower -1-sigma limit for n(m) (Mpc^-3 Msun^-1 h^4)
 # 5) number of halos in the bin
 # 6) analytical n(m) from ****
+# 7) peak height nu = delta_c / sigma(M,z), with delta_c = 1.686
 
-Errorbars give only the Poisson error on the number of halos. The
-analytic mass function is chosen through the parameter
+The mass reported in the first column is the average halo mass in the
+bin when more than one halo is present; otherwise it is the nominal
+logarithmic-bin center.
+
+Errorbars give only the Poisson error on the number of halos. The last
+column gives the peak height nu = delta_c / sigma(M,z), with
+delta_c = 1.686, evaluated at the representative mass of the bin. The
+halo mass function and this nu column are computed using the top-hat-
+filtered variance. This differs from the sigma(R) quantities reported
+in pinocchio.[run name].cosmology.out, which are based on Gaussian
+smoothing.
+
+The analytic mass function is chosen through the parameter
 AnalyticMassFunction:
 
     AnalyticMassFunction = 0:  Press  & Schechter (1974)
@@ -716,16 +728,21 @@ specified in the header:
 #13: first 3rd-order d ln D/d ln a
 #14: second 3rd-order d ln D/d ln a
 # SCALE-DEPENDENT QUANTITIES
-#15: smoothing scale (Mpc)
-#16: mass variance
-#17: variance of displacements
-#18: d Log sigma^2 / d Log R
+#15: smoothing scale R (Mpc)
+#16: Gaussian-filtered mass variance sigma_G^2(R)
+#17: Gaussian-filtered displacement variance
+#18: d Log sigma_G^2 / d Log R
 # POWER SPECTRUM
 #19: k (true Mpc^-1)
 #20: P(k)
 
 All these quantities are in true Mpc, not in Mpc/h, because this is
 the internal convention of the code.
+
+Columns 15-18 are computed from the mass-variance tables initialized
+inside initialize_cosmology(), which use Gaussian smoothing. They are
+therefore not the top-hat-filtered variance used later for the halo
+mass function and for the peak-height column nu in the .mf.out files.
 
 - pinocchio.[run name].t_snapshot.out
 

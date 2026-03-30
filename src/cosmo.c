@@ -582,10 +582,10 @@ int initialize_cosmology()
     fprintf(fd, "#13: first 3rd-order d ln D/d ln a\n");
     fprintf(fd, "#14: second 3rd-order d ln D/d ln a\n");
     fprintf(fd, "# SCALE-DEPENDENT QUANTITIES\n");
-    fprintf(fd, "#15: smoothing scale (Mpc)\n");
-    fprintf(fd, "#16: mass variance\n");
-    fprintf(fd, "#17: variance of displacements\n");
-    fprintf(fd, "#18: d Log sigma^2 / d Log R\n");
+    fprintf(fd, "#15: smoothing scale R (Mpc)\n");
+    fprintf(fd, "#16: Gaussian-filtered mass variance sigma_G^2(R)\n");
+    fprintf(fd, "#17: Gaussian-filtered displacement variance\n");
+    fprintf(fd, "#18: d Log sigma_G^2 / d Log R\n");
     fprintf(fd, "# POWER SPECTRUM\n");
     fprintf(fd, "#19: k (true Mpc^-1)\n");
     fprintf(fd, "#20: P(k)\n");
