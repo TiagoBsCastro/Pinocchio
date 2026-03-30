@@ -755,7 +755,9 @@ static inline double Ez2_from_a(double a)
 }
 static inline double dlnE2_da(double a)
 {
-  /* If we have an external H(z) table, use spline derivative of log10 H(a) */
+  /* If we have an external E(z)=H(z)/H0 table, use the spline derivative
+     of log10 E(a). The derivative is the same as for log10 H(a) up to an
+     additive constant in the logarithm. */
 #ifdef READ_HUBBLE_TABLE
   if (SPLINE[SP_EXT_HUBBLE])
   {
@@ -1030,7 +1032,8 @@ double DE_EquationOfState(double a)
 #ifdef READ_HUBBLE_TABLE
 int read_TabulatedHubble(void)
 {
-  /* Reads a table with redshift z and E(z) and builds a spline over log10(a). */
+  /* Reads a table with redshift z and E(z)=H(z)/H0 (dimensionless)
+     and builds a spline over log10(a). */
   if (!strcmp(params.HubbleTableFile, "no") || !strcmp(params.HubbleTableFile, "\0"))
     return 0; /* nothing to do */
 
@@ -1082,7 +1085,7 @@ int read_TabulatedHubble(void)
     {
       double a = 1.0 / (1.0 + z);
       ax[i] = log10(a);
-      Hz[i] = log10(H);
+      Hz[i] = log10(H); /* H stores E(z)=H(z)/H0, dimensionless */
       i++;
     }
     fclose(fd);
@@ -1102,6 +1105,50 @@ int read_TabulatedHubble(void)
         Hz[n - 1 - j] = tmp;
       }
     }
+
+    /* Validate absolute normalization at z=0. This matters because the
+       code reconstructs H(z)=100*h*E(z) from the tabulated value. */
+    if (n > 0)
+    {
+      const double a_tol = 1.e-10;
+      const double e_tol = 1.e-4;
+      int have_z0 = 0;
+      double e0 = 0.0;
+
+      if (fabs(ax[n - 1]) < a_tol)
+      {
+        have_z0 = 1;
+        e0 = pow(10., Hz[n - 1]);
+      }
+
+      if (!have_z0)
+      {
+        printf("ERROR on task 0: Hubble table '%s' does not include z=0. "
+               "When READ_HUBBLE_TABLE is active, the code expects "
+               "E(z)=H(z)/H0 and needs E(0)=1 for the absolute H(z) "
+               "normalization.\n",
+               params.HubbleTableFile);
+        fflush(stdout);
+        err = 1;
+      }
+      else if (fabs(e0 - 1.0) > e_tol)
+      {
+        printf("ERROR on task 0: Hubble table '%s' is not normalized as "
+               "E(z)=H(z)/H0 at z=0: found E(0)=%.8g, expected 1 "
+               "within %.1e.\n",
+               params.HubbleTableFile, e0, e_tol);
+        fflush(stdout);
+        err = 1;
+      }
+    }
+  }
+
+  MPI_Bcast(&err, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  if (err)
+  {
+    free(Hz);
+    free(ax);
+    return 1;
   }
 
   MPI_Bcast(ax, n * sizeof(double), MPI_BYTE, 0, MPI_COMM_WORLD);
@@ -1929,10 +1976,12 @@ double OmegaLambda(double z)
 double Hubble(double z)
 {
   /* Hubble parameter as a function of redshift
-     DIMENSION: km/s/Mpc  */
+     DIMENSION: km/s/Mpc
+     If an external E(z)=H(z)/H0 table is provided, reconstruct H(z)
+     as 100 * Hubble100 * E(z). */
   double Esq, de_eos;
 #ifdef READ_HUBBLE_TABLE
-  /* If an external H(z) table is provided, prefer it. */
+  /* If an external E(z) table is provided, prefer it. */
   if (SPLINE[SP_EXT_HUBBLE])
     return 100 * params.Hubble100 * pow(10, my_spline_eval(SPLINE[SP_EXT_HUBBLE], -log10(1. + z), ACCEL[SP_EXT_HUBBLE]));
 #endif
