@@ -247,7 +247,7 @@ int initialize_cosmology()
   }
 
 #ifdef READ_HUBBLE_TABLE
-  /* If requested, read tabulated H(z) and create its spline over log10(a). */
+  /* If requested, read tabulated E(z)=H(z)/H0 and create its spline over log10(a). */
   if (read_TabulatedHubble())
     return 1;
 #endif
@@ -762,12 +762,12 @@ static inline double dlnE2_da(double a)
   if (SPLINE[SP_EXT_HUBBLE])
   {
     double xlna = log10(a);
-    /* my_spline_eval_deriv returns d/dx of the spline y(x); here y=log10 H, x=log10 a */
-    double dlogH_dlogA = my_spline_eval_deriv(SPLINE[SP_EXT_HUBBLE], xlna, ACCEL[SP_EXT_HUBBLE]);
-    /* ln(E^2) = 2 ln H + const => d/da ln(E^2) = 2 d/da ln H
-       and d/da ln H = (1/a) d/d(log a) ln H; since log10, there is a constant factor that cancels
-       when converting derivative of log10 to natural log ratio. Using (2/a) * d log10 H / d log10 a suffices. */
-    return (2.0 / a) * dlogH_dlogA;
+    /* my_spline_eval_deriv returns d/dx of the spline y(x); here y=log10 E, x=log10 a */
+    double dlogE_dlogA = my_spline_eval_deriv(SPLINE[SP_EXT_HUBBLE], xlna, ACCEL[SP_EXT_HUBBLE]);
+    /* ln(E^2) = 2 ln E => d/da ln(E^2) = 2 d/da ln E
+       and d/da ln E = (1/a) d/d(log a) ln E; since log10, there is a constant factor that cancels
+       when converting derivative of log10 to natural log ratio. Using (2/a) * d log10 E / d log10 a suffices. */
+    return (2.0 / a) * dlogE_dlogA;
   }
 #endif
 
@@ -1146,6 +1146,8 @@ int read_TabulatedHubble(void)
   MPI_Bcast(&err, 1, MPI_INT, 0, MPI_COMM_WORLD);
   if (err)
   {
+    gsl_spline_free(SPLINE[SP_EXT_HUBBLE]);
+    SPLINE[SP_EXT_HUBBLE] = NULL;
     free(Hz);
     free(ax);
     return 1;
