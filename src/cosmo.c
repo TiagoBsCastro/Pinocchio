@@ -1030,7 +1030,7 @@ double DE_EquationOfState(double a)
 #ifdef READ_HUBBLE_TABLE
 int read_TabulatedHubble(void)
 {
-  /* Reads a table with redshift z and H(z) [km/s/Mpc] and builds a spline over log10(a). */
+  /* Reads a table with redshift z and E(z) and builds a spline over log10(a). */
   if (!strcmp(params.HubbleTableFile, "no") || !strcmp(params.HubbleTableFile, "\0"))
     return 0; /* nothing to do */
 
