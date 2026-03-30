@@ -1082,7 +1082,7 @@ int read_TabulatedHubble(void)
     {
       double a = 1.0 / (1.0 + z);
       ax[i] = log10(a);
-      Hz[i] = log10(H); /* already km/s/Mpc */
+      Hz[i] = log10(H);
       i++;
     }
     fclose(fd);
