@@ -1772,7 +1772,7 @@ int set_scaledep_GM()
         printf("WARNING in scale-dependent density growth rate for smoothing radius %d (%f): accuracy not guaranteed [diff1=%g - diff2=%g]\n",
                ismooth, Smoothing.Radius[ismooth], diff1, diff2);
       if (fabs(diff1) < fabs(diff2))
-        Smoothing.k_GM_dens[ismooth] = logk1;
+        Smoothing.k_GM_dens[ismooth] = k1;
       else
         Smoothing.k_GM_dens[ismooth] = k2;
     }
@@ -1975,11 +1975,11 @@ int set_scaledep_GM()
 #ifdef DEBUG
     printf("displacements, smoothing %d, iter=%d\n", ismooth, iter);
     Time = 1.0;
-    gsl_integration_qags(&Function2, -4., 2., 0.0, TOLERANCE, NWINT, workspace, &result, &error);
+    gsl_integration_qags(&Function2, LOGKMIN, log10_nyquist, 0.0, TOLERANCE, NWINT, workspace, &result, &error);
     normGM1 = sqrt(result);
-    gsl_integration_qags(&Function31, -4., 2., 0.0, TOLERANCE, NWINT, workspace, &result, &error);
+    gsl_integration_qags(&Function31, LOGKMIN, log10_nyquist, 0.0, TOLERANCE, NWINT, workspace, &result, &error);
     normGM2 = sqrt(result);
-    gsl_integration_qags(&Function32, -4., 2., 0.0, TOLERANCE, NWINT, workspace, &result, &error);
+    gsl_integration_qags(&Function32, LOGKMIN, log10_nyquist, 0.0, TOLERANCE, NWINT, workspace, &result, &error);
     normGMm = sqrt(result);
     if (!ThisTask)
       for (i = 0; i < NBINS; i++)
@@ -1988,11 +1988,11 @@ int set_scaledep_GM()
         fprintf(fd, "  %d %g  %g  %g  %g  %g",
                 ismooth, Smoothing.Rad_GM[ismooth], Smoothing.k_GM_displ[ismooth],
                 Time, vector[i], GrowingMode(1. / Time - 1., Smoothing.k_GM_displ[ismooth]) / GrowingMode(0.0, Smoothing.k_GM_displ[ismooth]));
-        gsl_integration_qags(&Function2, -4., 2., 0.0, TOLERANCE, NWINT, workspace, &result, &error);
+        gsl_integration_qags(&Function2, LOGKMIN, log10_nyquist, 0.0, TOLERANCE, NWINT, workspace, &result, &error);
         fprintf(fd, "  %g  %g", sqrt(result) / normGM1, GrowingMode_2LPT(1. / Time - 1., Smoothing.k_GM_displ[ismooth]) / GrowingMode_2LPT(0.0, Smoothing.k_GM_displ[ismooth]));
-        gsl_integration_qags(&Function31, -4., 2., 0.0, TOLERANCE, NWINT, workspace, &result, &error);
+        gsl_integration_qags(&Function31, LOGKMIN, log10_nyquist, 0.0, TOLERANCE, NWINT, workspace, &result, &error);
         fprintf(fd, "  %g  %g", sqrt(result) / normGM2, GrowingMode_3LPT_1(1. / Time - 1., Smoothing.k_GM_displ[ismooth]) / GrowingMode_3LPT_1(0.0, Smoothing.k_GM_displ[ismooth]));
-        gsl_integration_qags(&Function32, -4., 2., 0.0, TOLERANCE, NWINT, workspace, &result, &error);
+        gsl_integration_qags(&Function32, LOGKMIN, log10_nyquist, 0.0, TOLERANCE, NWINT, workspace, &result, &error);
         fprintf(fd, "  %g  %g\n", sqrt(result) / normGMm, GrowingMode_3LPT_2(1. / Time - 1., Smoothing.k_GM_displ[ismooth]) / GrowingMode_3LPT_2(0.0, Smoothing.k_GM_displ[ismooth]));
       }
 #endif
@@ -2126,11 +2126,11 @@ int set_scaledep_GM()
 #ifdef DEBUG
     printf("velocities, smoothing %d, iter=%d\n", ismooth, iter);
     Time = 1.0;
-    gsl_integration_qags(&Function2, -4., 2., 0.0, TOLERANCE, NWINT, workspace, &result, &error);
+    gsl_integration_qags(&Function2, LOGKMIN, log10_nyquist, 0.0, TOLERANCE, NWINT, workspace, &result, &error);
     normGM1 = sqrt(result);
-    gsl_integration_qags(&Function31, -4., 2., 0.0, TOLERANCE, NWINT, workspace, &result, &error);
+    gsl_integration_qags(&Function31, LOGKMIN, log10_nyquist, 0.0, TOLERANCE, NWINT, workspace, &result, &error);
     normGM2 = sqrt(result);
-    gsl_integration_qags(&Function32, -4., 2., 0.0, TOLERANCE, NWINT, workspace, &result, &error);
+    gsl_integration_qags(&Function32, LOGKMIN, log10_nyquist, 0.0, TOLERANCE, NWINT, workspace, &result, &error);
     normGMm = sqrt(result);
     if (!ThisTask)
       for (i = 0; i < NBINS; i++)
@@ -2140,13 +2140,13 @@ int set_scaledep_GM()
                 ismooth, Smoothing.Rad_GM[ismooth], Smoothing.k_GM_vel[ismooth],
                 Time, vector[i], GrowingMode(1. / Time - 1., Smoothing.k_GM_vel[ismooth]) * fomega(1. / Time - 1., Smoothing.k_GM_vel[ismooth]) / GrowingMode(0., Smoothing.k_GM_vel[ismooth]) / fomega(0., Smoothing.k_GM_vel[ismooth]));
 
-        gsl_integration_qags(&Function2, -4., 2., 0.0, TOLERANCE, NWINT, workspace, &result, &error);
+        gsl_integration_qags(&Function2, LOGKMIN, log10_nyquist, 0.0, TOLERANCE, NWINT, workspace, &result, &error);
         fprintf(fd, "  %g  %g", sqrt(result) / normGM1, GrowingMode_2LPT(1. / Time - 1., Smoothing.k_GM_vel[ismooth]) * fomega_2LPT(1. / Time - 1., Smoothing.k_GM_vel[ismooth]) / GrowingMode_2LPT(0., Smoothing.k_GM_vel[ismooth]) / fomega_2LPT(0.0, Smoothing.k_GM_vel[ismooth]));
 
-        gsl_integration_qags(&Function31, -4., 2., 0.0, TOLERANCE, NWINT, workspace, &result, &error);
+        gsl_integration_qags(&Function31, LOGKMIN, log10_nyquist, 0.0, TOLERANCE, NWINT, workspace, &result, &error);
         fprintf(fd, "  %g  %g", sqrt(result) / normGM2, GrowingMode_3LPT_1(1. / Time - 1., Smoothing.k_GM_vel[ismooth]) * fomega_3LPT_1(1. / Time - 1., Smoothing.k_GM_vel[ismooth]) / GrowingMode_3LPT_1(0., Smoothing.k_GM_vel[ismooth]) / fomega_3LPT_1(0., Smoothing.k_GM_vel[ismooth]));
 
-        gsl_integration_qags(&Function32, -4., 2., 0.0, TOLERANCE, NWINT, workspace, &result, &error);
+        gsl_integration_qags(&Function32, LOGKMIN, log10_nyquist, 0.0, TOLERANCE, NWINT, workspace, &result, &error);
         fprintf(fd, "  %g  %g\n", sqrt(result) / normGMm, GrowingMode_3LPT_2(1. / Time - 1., Smoothing.k_GM_vel[ismooth]) * fomega_3LPT_2(1. / Time - 1., Smoothing.k_GM_vel[ismooth]) / GrowingMode_3LPT_2(0., Smoothing.k_GM_vel[ismooth]) / fomega_3LPT_2(0., Smoothing.k_GM_vel[ismooth]));
       }
 #endif
