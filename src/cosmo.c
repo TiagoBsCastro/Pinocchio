@@ -1116,11 +1116,14 @@ int read_TabulatedHubble(void)
       int have_z0 = 0;
       double e0 = 0.0;
 
-      if (fabs(ax[n - 1]) < a_tol)
-      {
-        have_z0 = 1;
-        e0 = pow(10., Hz[n - 1]);
-      }
+      /* search the whole array for z=0, i.e. log10(a)=0 */
+      for (int j = 0; j < n; j++)
+        if (fabs(ax[j]) < a_tol)
+        {
+          have_z0 = 1;
+          e0 = pow(10., Hz[j]);
+          break;
+        }
 
       if (!have_z0)
       {
@@ -1144,8 +1147,19 @@ int read_TabulatedHubble(void)
         {
           ax = tmp_ax;
           Hz = tmp_Hz;
-          ax[n] = 0.0; /* log10(a) = log10(1) = 0 */
-          Hz[n] = 0.0; /* log10(E) = log10(1) = 0 */
+          /* find insertion point to keep ax[] strictly increasing */
+          int ip = n;
+          for (int j = 0; j < n; j++)
+            if (ax[j] > 0.0)
+            {
+              ip = j;
+              break;
+            }
+          /* shift elements from ip..n-1 one position to the right */
+          memmove(&ax[ip + 1], &ax[ip], (n - ip) * sizeof(double));
+          memmove(&Hz[ip + 1], &Hz[ip], (n - ip) * sizeof(double));
+          ax[ip] = 0.0; /* log10(a) = log10(1) = 0 */
+          Hz[ip] = 0.0; /* log10(E) = log10(1) = 0 */
           n++;
         }
       }
