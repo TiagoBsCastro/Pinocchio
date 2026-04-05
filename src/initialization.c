@@ -1710,6 +1710,7 @@ int set_scaledep_GM()
      the integral will be truncated at the Nyquist frequency */
   WindowFunctionType = 0;
   nyquist = NYQUIST * PI / params.InterPartDist;
+  double log10_nyquist = log10(nyquist);
 
 #ifdef DEBUG
   if (!ThisTask)
@@ -1726,7 +1727,7 @@ int set_scaledep_GM()
     for (i = 0; i < NBINS; i++)
     {
       Time = pow(10., SPLINE[SP_TIME]->x[i]);
-      gsl_integration_qags(&Function, -4., nyquist, 0.0, TOLERANCE, NWINT, workspace, &result, &error);
+      gsl_integration_qags(&Function, LOGKMIN, log10_nyquist, 0.0, TOLERANCE, NWINT, workspace, &result, &error);
       vector[i] = sqrt(result);
     }
     normv = vector[Today];
@@ -1878,7 +1879,7 @@ int set_scaledep_GM()
     for (i = 0; i < NBINS; i++)
     {
       Time = pow(10., SPLINE[SP_TIME]->x[i]);
-      gsl_integration_qags(&Function, -4., nyquist, 0.0, TOLERANCE, NWINT, workspace, &result, &error);
+      gsl_integration_qags(&Function, LOGKMIN, log10_nyquist, 0.0, TOLERANCE, NWINT, workspace, &result, &error);
       vector[i] = sqrt(result);
     }
     normv = vector[Today];
@@ -2030,7 +2031,7 @@ int set_scaledep_GM()
     for (i = 0; i < NBINS; i++)
     {
       Time = pow(10., SPLINE[SP_TIME]->x[i]);
-      gsl_integration_qags(&Function, -4., nyquist, 0.0, TOLERANCE, NWINT, workspace, &result, &error);
+      gsl_integration_qags(&Function, LOGKMIN, log10_nyquist, 0.0, TOLERANCE, NWINT, workspace, &result, &error);
       vector[i] = sqrt(result);
     }
     normv = vector[Today];
@@ -2053,7 +2054,7 @@ int set_scaledep_GM()
     {
       Time = pow(10., SPLINE[SP_TIME]->x[i]);
       diff1 += vector[i] - GrowingMode(1. / Time - 1., k1) * fomega(1. / Time - 1, k1) / normGM1;
-      diff2 += vector[i] - GrowingMode(1. / Time - 1., k2) * fomega(1. / Time - 1, k1) / normGM2;
+      diff2 += vector[i] - GrowingMode(1. / Time - 1., k2) * fomega(1. / Time - 1, k2) / normGM2;
     }
     diff1 /= (double)NBINS;
     diff2 /= (double)NBINS;
