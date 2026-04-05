@@ -1107,7 +1107,8 @@ int read_TabulatedHubble(void)
     }
 
     /* Validate absolute normalization at z=0. This matters because the
-       code reconstructs H(z)=100*h*E(z) from the tabulated value. */
+       code reconstructs H(z)=100*h*E(z) from the tabulated value.
+       If z=0 is missing, add E(0)=1 automatically. */
     if (n > 0)
     {
       const double a_tol = 1.e-10;
@@ -1123,13 +1124,15 @@ int read_TabulatedHubble(void)
 
       if (!have_z0)
       {
-        printf("ERROR on task 0: Hubble table '%s' does not include z=0. "
-               "When READ_HUBBLE_TABLE is active, the code expects "
-               "E(z)=H(z)/H0 and needs E(0)=1 for the absolute H(z) "
-               "normalization.\n",
+        printf("WARNING on task 0: Hubble table '%s' does not include z=0. "
+               "Adding E(0)=1 automatically.\n",
                params.HubbleTableFile);
         fflush(stdout);
-        err = 1;
+        ax = (double *)realloc(ax, (n + 1) * sizeof(double));
+        Hz = (double *)realloc(Hz, (n + 1) * sizeof(double));
+        ax[n] = 0.0; /* log10(a) = log10(1) = 0 */
+        Hz[n] = 0.0; /* log10(E) = log10(1) = 0 */
+        n++;
       }
       else if (fabs(e0 - 1.0) > e_tol)
       {
@@ -1151,6 +1154,17 @@ int read_TabulatedHubble(void)
     free(Hz);
     free(ax);
     return 1;
+  }
+
+  /* n may have changed if z=0 was added; re-broadcast and reallocate spline */
+  MPI_Bcast(&n, sizeof(int), MPI_BYTE, 0, MPI_COMM_WORLD);
+  gsl_spline_free(SPLINE[SP_EXT_HUBBLE]);
+  SPLINE[SP_EXT_HUBBLE] = gsl_spline_alloc(gsl_interp_cspline, n);
+
+  if (ThisTask)
+  {
+    ax = (double *)realloc(ax, n * sizeof(double));
+    Hz = (double *)realloc(Hz, n * sizeof(double));
   }
 
   MPI_Bcast(ax, n * sizeof(double), MPI_BYTE, 0, MPI_COMM_WORLD);
