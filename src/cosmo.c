@@ -1128,11 +1128,26 @@ int read_TabulatedHubble(void)
                "Adding E(0)=1 automatically.\n",
                params.HubbleTableFile);
         fflush(stdout);
-        ax = (double *)realloc(ax, (n + 1) * sizeof(double));
-        Hz = (double *)realloc(Hz, (n + 1) * sizeof(double));
-        ax[n] = 0.0; /* log10(a) = log10(1) = 0 */
-        Hz[n] = 0.0; /* log10(E) = log10(1) = 0 */
-        n++;
+        double *tmp_ax = (double *)realloc(ax, (n + 1) * sizeof(double));
+        double *tmp_Hz = (double *)realloc(Hz, (n + 1) * sizeof(double));
+        if (!tmp_ax || !tmp_Hz)
+        {
+          printf("ERROR on task 0: realloc failed while extending Hubble table\n");
+          fflush(stdout);
+          if (tmp_ax)
+            ax = tmp_ax;
+          if (tmp_Hz)
+            Hz = tmp_Hz;
+          err = 1;
+        }
+        else
+        {
+          ax = tmp_ax;
+          Hz = tmp_Hz;
+          ax[n] = 0.0; /* log10(a) = log10(1) = 0 */
+          Hz[n] = 0.0; /* log10(E) = log10(1) = 0 */
+          n++;
+        }
       }
       else if (fabs(e0 - 1.0) > e_tol)
       {
