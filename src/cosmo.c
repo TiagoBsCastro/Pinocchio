@@ -1178,8 +1178,20 @@ int read_TabulatedHubble(void)
 
   if (ThisTask)
   {
-    ax = (double *)realloc(ax, n * sizeof(double));
-    Hz = (double *)realloc(Hz, n * sizeof(double));
+    double *tmp_ax = (double *)realloc(ax, n * sizeof(double));
+    double *tmp_Hz = (double *)realloc(Hz, n * sizeof(double));
+    if (!tmp_ax || !tmp_Hz)
+    {
+      printf("ERROR on task %d: realloc failed while resizing Hubble table\n", ThisTask);
+      fflush(stdout);
+      if (tmp_ax)
+        ax = tmp_ax;
+      if (tmp_Hz)
+        Hz = tmp_Hz;
+      MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    ax = tmp_ax;
+    Hz = tmp_Hz;
   }
 
   MPI_Bcast(ax, n * sizeof(double), MPI_BYTE, 0, MPI_COMM_WORLD);
