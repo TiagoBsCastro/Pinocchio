@@ -70,6 +70,9 @@
 #include <omp.h>
 #endif
 
+/* Forward declaration: needed because mass_maps_init_sheets() calls it on failure */
+void mass_maps_free_sheets(void);
+
 /* ---------------------------------------------------------- */
 /* Optional displacement histogram (compile-time, default OFF) */
 /* ---------------------------------------------------------- */
