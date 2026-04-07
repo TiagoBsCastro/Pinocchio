@@ -1395,6 +1395,9 @@ static inline long mass_maps_axis_pixel_ring(int nside)
  *                parameter alpha in [0,1] locating the crossing.
  *   - entry_pos  Optional; on success, receives the 3D crossing position
  *                Pprev + alpha * (Pcurr - Pprev).
+ *   - chi_cross_out Optional; on success, receives the interpolated comoving
+ *                distance at the crossing: chi_prev + alpha * (chi_curr - chi_prev).
+ *                Preferred over |entry_pos - c| for deriving the crossing redshift.
  *
  * Returns
  *   1 if a crossing is detected and the intersection is computed; otherwise 0.
@@ -1404,8 +1407,12 @@ static inline long mass_maps_axis_pixel_ring(int nside)
  *     A crossing is reported only for the inside→outside case
  *       (H_prev > 0 && H_curr <= 0).
  *   - Uses linear interpolation of H in alpha and solves H(alpha)=0 via
- *       alpha = H_prev / (H_prev - H_curr), with a small-denominator guard
- *       using MASS_MAPS_F_EPS. The resulting alpha is clamped to [0,1].
+ *       alpha0 = H_prev / (H_prev - H_curr) as a secant predictor, then
+ *       applies one Newton corrector step on F(alpha) = chi(alpha) - |P(alpha) - c|
+ *       to refine the crossing fraction. The corrector is skipped when
+ *       |P(alpha0)-c| == 0 or the derivative is too small.
+ *       A small-denominator guard using MASS_MAPS_F_EPS protects the predictor.
+ *       The resulting alpha is clamped to [0,1] after both steps.
  *
  * Notes
  *   - Purely local computation; no shared state is modified.
@@ -1418,7 +1425,8 @@ static inline int mass_maps_crossing_from_shifted_positions(const double Pprev[3
                                                             double chi_prev,
                                                             double chi_curr,
                                                             double *alpha_out,
-                                                            double entry_pos[3])
+                                                            double entry_pos[3],
+                                                            double *chi_cross_out)
 {
   /* Distances to PLC center */
   double dx0 = Pprev[0] - c_phys[0];
@@ -1436,11 +1444,39 @@ static inline int mass_maps_crossing_from_shifted_positions(const double Pprev[3
   double denom = H_prev - H_curr;
   if (fabs(denom) < MASS_MAPS_F_EPS)
     return 0;
+  /* Secant predictor */
   double alpha = H_prev / denom;
   if (alpha < 0.0)
     alpha = 0.0;
   else if (alpha > 1.0)
     alpha = 1.0;
+
+  /* One Newton corrector step on F(alpha) = chi(alpha) - |P(alpha) - c_phys| */
+  {
+    const double newton_eps = 1e-12;
+    double dP[3] = {Pcurr[0] - Pprev[0], Pcurr[1] - Pprev[1], Pcurr[2] - Pprev[2]};
+    double dchi = chi_curr - chi_prev;
+    /* Evaluate at alpha0 */
+    double P0[3] = {Pprev[0] + alpha * dP[0] - c_phys[0],
+                    Pprev[1] + alpha * dP[1] - c_phys[1],
+                    Pprev[2] + alpha * dP[2] - c_phys[2]};
+    double r0 = sqrt(P0[0] * P0[0] + P0[1] * P0[1] + P0[2] * P0[2]);
+    if (r0 > 0.0)
+    {
+      double F0 = chi_prev + alpha * dchi - r0;
+      double Fp0 = dchi - (P0[0] * dP[0] + P0[1] * dP[1] + P0[2] * dP[2]) / r0;
+      if (fabs(Fp0) > newton_eps)
+      {
+        double alpha1 = alpha - F0 / Fp0;
+        if (alpha1 < 0.0)
+          alpha1 = 0.0;
+        else if (alpha1 > 1.0)
+          alpha1 = 1.0;
+        alpha = alpha1;
+      }
+    }
+  }
+
   if (alpha_out)
     *alpha_out = alpha;
   if (entry_pos)
@@ -1449,6 +1485,8 @@ static inline int mass_maps_crossing_from_shifted_positions(const double Pprev[3
     entry_pos[1] = Pprev[1] + alpha * (Pcurr[1] - Pprev[1]);
     entry_pos[2] = Pprev[2] + alpha * (Pcurr[2] - Pprev[2]);
   }
+  if (chi_cross_out)
+    *chi_cross_out = chi_prev + alpha * (chi_curr - chi_prev);
   return 1;
 }
 
@@ -3158,7 +3196,8 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                         Pcurr[0] == 0.0 && Pcurr[1] == 0.0 && Pcurr[2] == 0.0)
                       continue;
                     double entry_pos[3];
-                    if (!mass_maps_crossing_from_shifted_positions(Pprev, Pcurr, c_phys, chi_prev_seg, chi_curr_seg, NULL, entry_pos))
+                    double chi_cross;
+                    if (!mass_maps_crossing_from_shifted_positions(Pprev, Pcurr, c_phys, chi_prev_seg, chi_curr_seg, NULL, entry_pos, &chi_cross))
                       continue;
                     /* Pixel-based angular selection: compute target pixel and keep only if inside cap */
                     long ipix_sel;
@@ -3172,11 +3211,7 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
 #ifdef MASS_MAPS_FILTER_UNCOLLAPSED
                     {
                       /* Filter: include only if ZPLC > ZACC */
-                      double dx = entry_pos[0] - c_phys[0];
-                      double dy = entry_pos[1] - c_phys[1];
-                      double dz = entry_pos[2] - c_phys[2];
-                      double r_entry = sqrt(dx * dx + dy * dy + dz * dz);
-                      double z_plc = InverseComovingDistance(r_entry);
+                      double z_plc = InverseComovingDistance(chi_cross);
 #ifdef SNAPSHOT
                       double z_acc = mass_maps_get_zacc_global(ig, jg, kg);
 #ifdef _OPENMP
@@ -3339,7 +3374,8 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                     double Pprev[3] = {pos_prev[0] + shift[0], pos_prev[1] + shift[1], pos_prev[2] + shift[2]};
                     double Pcurr[3] = {pos_curr[0] + shift[0], pos_curr[1] + shift[1], pos_curr[2] + shift[2]};
                     double entry_pos[3];
-                    if (!mass_maps_crossing_from_shifted_positions(Pprev, Pcurr, c_phys, chi_prev_seg, chi_curr_seg, NULL, entry_pos))
+                    double chi_cross;
+                    if (!mass_maps_crossing_from_shifted_positions(Pprev, Pcurr, c_phys, chi_prev_seg, chi_curr_seg, NULL, entry_pos, &chi_cross))
                       continue;
                     /* Pixel-based angular selection: compute target pixel and keep only if inside cap */
                     long ipix_sel;
@@ -3352,11 +3388,7 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                     }
 #ifdef MASS_MAPS_FILTER_UNCOLLAPSED
                     {
-                      double dx = entry_pos[0] - c_phys[0];
-                      double dy = entry_pos[1] - c_phys[1];
-                      double dz = entry_pos[2] - c_phys[2];
-                      double r_entry = sqrt(dx * dx + dy * dy + dz * dz);
-                      double z_plc = InverseComovingDistance(r_entry);
+                      double z_plc = InverseComovingDistance(chi_cross);
 #ifdef SNAPSHOT
                       double z_acc = mass_maps_get_zacc_global(ig, jg, kg);
 #ifdef _OPENMP
@@ -3576,7 +3608,8 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
             double Pprev[3] = {pos_prev[0] + shift[0], pos_prev[1] + shift[1], pos_prev[2] + shift[2]};
             double Pcurr[3] = {pos_curr[0] + shift[0], pos_curr[1] + shift[1], pos_curr[2] + shift[2]};
             double entry_pos[3];
-            if (!mass_maps_crossing_from_shifted_positions(Pprev, Pcurr, c_phys, chi_prev_seg, chi_curr_seg, NULL, entry_pos))
+            double chi_cross;
+            if (!mass_maps_crossing_from_shifted_positions(Pprev, Pcurr, c_phys, chi_prev_seg, chi_curr_seg, NULL, entry_pos, &chi_cross))
               continue;
             /* Pixel-based angular selection */
             long ipix_sel;
@@ -3589,11 +3622,7 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
             }
 #ifdef MASS_MAPS_FILTER_UNCOLLAPSED
             {
-              double dx = entry_pos[0] - c_phys[0];
-              double dy = entry_pos[1] - c_phys[1];
-              double dz = entry_pos[2] - c_phys[2];
-              double r_entry = sqrt(dx * dx + dy * dy + dz * dz);
-              double z_plc = InverseComovingDistance(r_entry);
+              double z_plc = InverseComovingDistance(chi_cross);
 #ifdef SNAPSHOT
               double z_acc = mass_maps_get_zacc_global(ig, jg, kg);
 #ifdef _OPENMP
