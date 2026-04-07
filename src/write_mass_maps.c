@@ -881,21 +881,20 @@ int mass_maps_init_sheets(void)
    *    (there are outputs.n boundaries for outputs.n-1 sheets).
    */
   NMassSheets = outputs.n - 1;
+  MassSheets = NULL;
+  MassMapBoundaryZ = NULL;
+  MassMapBoundaryChi = NULL;
+  MassMapBoundaryDA = NULL;
+
   MassSheets = (MassSheet *)malloc(sizeof(MassSheet) * NMassSheets);
   MassMapBoundaryZ = (double *)malloc(sizeof(double) * outputs.n);
   MassMapBoundaryChi = (double *)malloc(sizeof(double) * outputs.n);
   MassMapBoundaryDA = (double *)malloc(sizeof(double) * outputs.n);
-  if (!MassSheets)
+  if (!MassSheets || !MassMapBoundaryZ || !MassMapBoundaryChi || !MassMapBoundaryDA)
   {
     if (!ThisTask)
-      fprintf(stderr, "MASS_MAPS ERROR: Cannot allocate MassSheets (%d entries).\n", NMassSheets);
-    return 1;
-  }
-  if (!MassMapBoundaryZ || !MassMapBoundaryChi || !MassMapBoundaryDA)
-  {
-    if (!ThisTask)
-      fprintf(stderr, "MASS_MAPS ERROR: Cannot allocate boundary arrays (n=%d).\n", outputs.n);
-    return 1;
+      fprintf(stderr, "MASS_MAPS ERROR: Cannot allocate MassSheets (%d entries) or boundary arrays (n=%d).\n", NMassSheets, outputs.n);
+    goto fail;
   }
 
   /* Fill boundary arrays */
@@ -927,7 +926,7 @@ int mass_maps_init_sheets(void)
     {
       if (!ThisTask)
         fprintf(stderr, "MASS_MAPS ERROR: Non-positive comoving distance span for sheet %d (chi_hi=%g chi_lo=%g).\n", s, ms->chi_hi, ms->chi_lo);
-      return 1;
+      goto fail;
     }
     ms->inv_dchi = 1.0 / ms->delta_chi;
     ms->da_hi = MassMapBoundaryDA[s];
@@ -958,6 +957,10 @@ int mass_maps_init_sheets(void)
   }
 
   return 0;
+
+fail:
+  mass_maps_free_sheets();
+  return 1;
 }
 
 /**
@@ -1295,24 +1298,6 @@ int mass_maps_init_healpix_maps(int nside)
  *   - When npix <= 0, outputs (if requested) are set to their neutral defaults:
  *     sum=0, min=0, max=0, nnz=0.
  */
-/**
- * mass_maps_map_stats
- * -------------------
- * Purpose
- *   Gather basic statistics over a map buffer: sum, min, max, and exact non-zero count.
- *
- * Parameters
- *   - map      Pointer to map buffer (length npix). May be NULL when npix<=0.
- *   - npix     Number of pixels (>=0).
- *   - sum_out  Optional; receives sum (0 if npix<=0).
- *   - min_out  Optional; receives minimum (0 if npix<=0).
- *   - max_out  Optional; receives maximum (0 if npix<=0).
- *   - nnz_out  Optional; receives count of values v != 0.0.
- *
- * Notes
- *   - Exact comparison (v != 0.0); callers needing tolerance must post-process.
- *   - Safe for npix==0 (all outputs default to 0).
- */
 static inline void mass_maps_map_stats(const double *map, long npix,
                                        double *sum_out, double *min_out, double *max_out, long *nnz_out)
 {
@@ -1526,27 +1511,6 @@ static inline int mass_maps_crossing_from_shifted_positions(const double Pprev[3
  *     bounds with the segment's chi interval to early-accept or early-reject
  *     replications before finer tests.
  */
-/**
- * aabb_distance_bounds_to_point
- * -----------------------------
- * Purpose
- *   Compute the minimum distance (d_min) from point c to an axis-aligned box
- *   [minv,maxv] and the maximum corner distance (d_max).
- *
- * Parameters
- *   - minv[3]     Minimum corner.
- *   - maxv[3]     Maximum corner.
- *   - c[3]        Reference point.
- *   - dmin_out    Output: minimum distance (>=0).
- *   - dmax_out    Output: maximum distance (>= d_min).
- *
- * Behavior
- *   - d_min: sum squared clamp residuals per axis, then sqrt.
- *   - d_max: choose farther face delta per axis, then sqrt of sum squares.
- *
- * Notes
- *   - Used for radial pruning before finer angular/particle tests.
- */
 static inline void aabb_distance_bounds_to_point(const double minv[3], const double maxv[3], const double c[3], double *dmin_out, double *dmax_out)
 {
   /* d_min: point-to-box distance */
@@ -1740,7 +1704,7 @@ int mass_maps_write_segment_map(int s)
   if (!map)
     return 1;
 
-  fits_create_file(fptr ? &fptr : &fptr, fitsname, &status);
+  fits_create_file(&fptr, fitsname, &status);
   if (status)
   {
     fits_report_error(stderr, status);
@@ -3236,10 +3200,41 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                     long ipix_sel;
                     if (!mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, &ipix_sel))
                       continue;
-                    if (params.PLCAperture < 180.0)
                     {
-                      if (!((unsigned long)ipix_sel < (unsigned long)MassMapNCAP))
-                        continue; /* outside cone */
+                      int prefix_accept = ((unsigned long)ipix_sel < (unsigned long)MassMapNCAP);
+#if MASS_MAPS_CAP_DIAG
+                      if (MassMapCapDiagActive && params.PLCAperture < 180.0)
+                      {
+                        int geom_accept = mass_maps_entry_inside_aperture(entry_pos);
+                        double ang = mass_maps_angle_deg_from_pos(entry_pos);
+                        if (geom_accept && !prefix_accept)
+                        {
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                          MassMapCapPrefixMiss++;
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+                          {
+                            if (ang > MassMapCapMissAngleMax)
+                              MassMapCapMissAngleMax = ang;
+                          }
+                        }
+                        if (prefix_accept)
+                        {
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+                          {
+                            if (ang > MassMapCapAcceptAngleMax)
+                              MassMapCapAcceptAngleMax = ang;
+                          }
+                        }
+                      }
+#endif
+                      if (params.PLCAperture < 180.0 && !prefix_accept)
+                        continue;
                     }
 #ifdef MASS_MAPS_FILTER_UNCOLLAPSED
                     {
@@ -3294,58 +3289,19 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                     local_cross++;
                     if (s_map >= 0 && s_map < NMassSheets && MassMapNSIDE_current > 0)
                     {
-                      long ipix;
-                      if (mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, &ipix))
+                      if ((unsigned long)ipix_sel < (unsigned long)MassMapNPIX)
                       {
-                        if ((unsigned long)ipix < (unsigned long)MassMapNPIX)
+                        if (LocalMap)
                         {
-                          if (MassMapCapDiagActive)
-                          {
-                            double ang = mass_maps_angle_deg_from_pos(entry_pos);
-#if MASS_MAPS_CAP_DIAG
-#ifdef _OPENMP
-#pragma omp critical
-#endif
-                            {
-                              if (ang > MassMapCapAcceptAngleMax)
-                                MassMapCapAcceptAngleMax = ang;
-                            }
-#endif
-                          }
-                          if (LocalMap)
-                          {
-                            LocalMap[ipix] += 1.0;
-                          }
-                          else
-                          {
-                            double *map = mass_maps_segment_ptr(s_map);
-#ifdef _OPENMP
-#pragma omp atomic update
-#endif
-                            map[ipix] += 1.0;
-                          }
+                          LocalMap[ipix_sel] += 1.0;
                         }
                         else
                         {
-                          ipix_oob_local++;
-                          if (MassMapCapDiagActive)
-                          {
-                            double ang = mass_maps_angle_deg_from_pos(entry_pos);
-#if MASS_MAPS_CAP_DIAG
-                        /* Track misses inside aperture but outside prefix */
+                          double *map = mass_maps_segment_ptr(s_map);
 #ifdef _OPENMP
 #pragma omp atomic update
 #endif
-                            MassMapCapPrefixMiss++;
-#ifdef _OPENMP
-#pragma omp critical
-#endif
-                            {
-                              if (ang > MassMapCapMissAngleMax)
-                                MassMapCapMissAngleMax = ang;
-                            }
-#endif
-                          }
+                          map[ipix_sel] += 1.0;
                         }
                       }
                     }
@@ -3414,9 +3370,40 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                     long ipix_sel;
                     if (!mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, &ipix_sel))
                       continue;
-                    if (params.PLCAperture < 180.0)
                     {
-                      if (!((unsigned long)ipix_sel < (unsigned long)MassMapNCAP))
+                      int prefix_accept = ((unsigned long)ipix_sel < (unsigned long)MassMapNCAP);
+#if MASS_MAPS_CAP_DIAG
+                      if (MassMapCapDiagActive && params.PLCAperture < 180.0)
+                      {
+                        int geom_accept = mass_maps_entry_inside_aperture(entry_pos);
+                        double ang = mass_maps_angle_deg_from_pos(entry_pos);
+                        if (geom_accept && !prefix_accept)
+                        {
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                          MassMapCapPrefixMiss++;
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+                          {
+                            if (ang > MassMapCapMissAngleMax)
+                              MassMapCapMissAngleMax = ang;
+                          }
+                        }
+                        if (prefix_accept)
+                        {
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+                          {
+                            if (ang > MassMapCapAcceptAngleMax)
+                              MassMapCapAcceptAngleMax = ang;
+                          }
+                        }
+                      }
+#endif
+                      if (params.PLCAperture < 180.0 && !prefix_accept)
                         continue;
                     }
 #ifdef MASS_MAPS_FILTER_UNCOLLAPSED
@@ -3471,51 +3458,13 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
                     local_cross++;
                     if (s_map >= 0 && s_map < NMassSheets && MassMapNSIDE_current > 0)
                     {
-                      /* Use previously selected pixel */
-                      long ipix = ipix_sel;
+                      if ((unsigned long)ipix_sel < (unsigned long)MassMapNPIX)
                       {
-                        if ((unsigned long)ipix < (unsigned long)MassMapNPIX)
-                        {
-                          double *map = mass_maps_segment_ptr(s_map);
+                        double *map = mass_maps_segment_ptr(s_map);
 #ifdef _OPENMP
 #pragma omp atomic update
 #endif
-                          map[ipix] += 1.0;
-                          if (MassMapCapDiagActive)
-                          {
-                            double ang = mass_maps_angle_deg_from_pos(entry_pos);
-#if MASS_MAPS_CAP_DIAG
-#ifdef _OPENMP
-#pragma omp critical
-#endif
-                            {
-                              if (ang > MassMapCapAcceptAngleMax)
-                                MassMapCapAcceptAngleMax = ang;
-                            }
-#endif
-                          }
-                        }
-                        else
-                        {
-                          ipix_oob_local++;
-                          if (MassMapCapDiagActive)
-                          {
-                            double ang = mass_maps_angle_deg_from_pos(entry_pos);
-#if MASS_MAPS_CAP_DIAG
-#ifdef _OPENMP
-#pragma omp atomic update
-#endif
-                            MassMapCapPrefixMiss++;
-#ifdef _OPENMP
-#pragma omp critical
-#endif
-                            {
-                              if (ang > MassMapCapMissAngleMax)
-                                MassMapCapMissAngleMax = ang;
-                            }
-#endif
-                          }
-                        }
+                        map[ipix_sel] += 1.0;
                       }
                     }
                   }
@@ -3601,9 +3550,22 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
     {
       int rep_id = MassMapSegmentReplications[ir];
       unsigned long long rep_crossings = 0ULL;
-      double shift[3] = {RepShift ? RepShift[3 * ir + 0] : 0.0,
-                         RepShift ? RepShift[3 * ir + 1] : 0.0,
-                         RepShift ? RepShift[3 * ir + 2] : 0.0};
+      double shift[3];
+      if (RepShift)
+      {
+        shift[0] = RepShift[3 * ir + 0];
+        shift[1] = RepShift[3 * ir + 1];
+        shift[2] = RepShift[3 * ir + 2];
+      }
+      else
+      {
+        int ii = plc.repls[rep_id].i;
+        int jj = plc.repls[rep_id].j;
+        int kk = plc.repls[rep_id].k;
+        shift[0] = ii * Bx;
+        shift[1] = jj * By;
+        shift[2] = kk * Bz;
+      }
       unsigned long long local_total = 0ULL, local_exceed = 0ULL;
       double local_max = 0.0;
       /* Buffer for fallback path: treat the whole local tile as one block (variable pad only) */
@@ -3648,9 +3610,40 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
             long ipix_sel;
             if (!mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, &ipix_sel))
               continue;
-            if (params.PLCAperture < 180.0)
             {
-              if (!((unsigned long)ipix_sel < (unsigned long)MassMapNCAP))
+              int prefix_accept = ((unsigned long)ipix_sel < (unsigned long)MassMapNCAP);
+#if MASS_MAPS_CAP_DIAG
+              if (MassMapCapDiagActive && params.PLCAperture < 180.0)
+              {
+                int geom_accept = mass_maps_entry_inside_aperture(entry_pos);
+                double ang = mass_maps_angle_deg_from_pos(entry_pos);
+                if (geom_accept && !prefix_accept)
+                {
+#ifdef _OPENMP
+#pragma omp atomic update
+#endif
+                  MassMapCapPrefixMiss++;
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+                  {
+                    if (ang > MassMapCapMissAngleMax)
+                      MassMapCapMissAngleMax = ang;
+                  }
+                }
+                if (prefix_accept)
+                {
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+                  {
+                    if (ang > MassMapCapAcceptAngleMax)
+                      MassMapCapAcceptAngleMax = ang;
+                  }
+                }
+              }
+#endif
+              if (params.PLCAperture < 180.0 && !prefix_accept)
                 continue;
             }
 #ifdef MASS_MAPS_FILTER_UNCOLLAPSED
@@ -3706,16 +3699,13 @@ void mass_maps_process_segment(int segment_index, double z_segment, int is_first
             int s_map = segment_index - 1;
             if (s_map >= 0 && s_map < NMassSheets && MassMapNSIDE_current > 0)
             {
-              long ipix;
-              if (mass_maps_compute_pixel_from_pos(entry_pos, MassMapNSIDE_current, &ipix))
+              if ((unsigned long)ipix_sel < (unsigned long)MassMapNPIX)
               {
-                if ((unsigned long)ipix >= (unsigned long)MassMapNPIX)
-                  continue; /* guard */
                 double *map = mass_maps_segment_ptr(s_map);
 #ifdef _OPENMP
 #pragma omp atomic update
 #endif
-                map[ipix] += 1.0;
+                map[ipix_sel] += 1.0;
               }
             }
           }
