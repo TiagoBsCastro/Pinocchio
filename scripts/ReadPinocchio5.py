@@ -611,9 +611,6 @@ class plc:
                     vec=struct.Struct('iii').unpack(bindata[pos:pos+12])[1]
                     pos+=12
                     vechalo.append(vec)
-                    if vec==0:
-                        print("THIS SHOULD NOT HAPPEN!")
-                        return None
                     Nblocks+=1
                     pos += 8+vec*record_length
                     cleanForm+='16x {}s 4x '.format(vec*record_length)
