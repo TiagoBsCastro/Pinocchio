@@ -361,7 +361,8 @@ int mass_maps_particle_sign_change(int rep_id,
                                    double z_prev,                          /* previous redshift */
                                    double z_curr,                          /* current redshift */
                                    double *alpha_out,                      /* crossing interpolation fraction (0..1) */
-                                   double entry_pos[3]);                   /* interpolated entry Eulerian position */
+                                   double entry_pos[3],                    /* interpolated entry Eulerian position */
+                                   double *chi_cross_out);                 /* interpolated comoving distance at crossing */
 int mass_maps_point_inside_lightcone(const double pos[3], long *ipix_out); /* if inside and NSIDE>0 sets *ipix_out, else -1 */
 /* Segment-level orchestrator (called after build_groups). */
 void mass_maps_process_segment(int segment_index, double z_segment, int is_first_segment);

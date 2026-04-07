@@ -2383,6 +2383,9 @@ static inline int mass_maps_get_group_id_global(int ig, int jg, int kg)
  *   z_curr      - current redshift  (used to compute chi_curr)
  *   alpha_out   - (optional) on success, fraction in [0,1] from previous to current state
  *   entry_pos   - (optional) interpolated Eulerian position at crossing
+ *   chi_cross_out - (optional) on success, interpolated comoving distance at crossing:
+ *                  chi_prev + alpha * (chi_curr - chi_prev). Preferred over
+ *                  |entry_pos - c| for deriving the crossing redshift.
  *
  * Notes:
  *   - If q == (0,0,0), disp_* are interpreted as absolute Eulerian positions.
@@ -2394,8 +2397,10 @@ static inline int mass_maps_get_group_id_global(int ig, int jg, int kg)
  *   2. Compute r_prev, r_curr and chi_prev=ComovingDistance(z_prev), chi_curr.
  *   3. H_prev = chi_prev - r_prev, H_curr = chi_curr - r_curr.
  *   4. Crossing when H_prev > 0 and H_curr <= 0.
- *   5. Interpolate alpha = H_prev / (H_prev - H_curr); clamp to [0,1].
+ *   5. Secant predictor: alpha0 = H_prev / (H_prev - H_curr); clamp to [0,1].
  *      Skip ambiguous cases where |H_prev - H_curr| < MASS_MAPS_F_EPS.
+ *   6. One Newton corrector step on F(alpha) = chi(alpha) - |P(alpha) - c|
+ *      to refine alpha. Skipped if |P(alpha0)-c| == 0 or derivative too small.
  *
  * Returns 1 if a crossing is detected per the above condition, else 0.
  */
@@ -2406,7 +2411,8 @@ int mass_maps_particle_sign_change(int rep_id,
                                    double z_prev,
                                    double z_curr,
                                    double *alpha_out,
-                                   double entry_pos[3])
+                                   double entry_pos[3],
+                                   double *chi_cross_out)
 {
   if (rep_id < 0 || rep_id >= plc.Nreplications)
     return 0;
@@ -2473,12 +2479,37 @@ int mass_maps_particle_sign_change(int rep_id,
   double denom = H_prev - H_curr;
   if (fabs(denom) < MASS_MAPS_F_EPS)
     return 0;                    /* ambiguous, skip */
-  double alpha = H_prev / denom; /* fraction from prev->curr to crossing */
+  double alpha = H_prev / denom; /* secant predictor */
   /* Clamp to [0,1] just in case */
   if (alpha < 0.0)
     alpha = 0.0;
   else if (alpha > 1.0)
     alpha = 1.0;
+
+  /* One Newton corrector step on F(alpha) = chi(alpha) - |P(alpha) - c| */
+  {
+    const double newton_eps = 1e-12;
+    double dP[3] = {pos_curr[0] - pos_prev[0], pos_curr[1] - pos_prev[1], pos_curr[2] - pos_prev[2]};
+    double dchi = chi_curr - chi_prev;
+    double P0[3] = {pos_prev[0] + alpha * dP[0] - c0,
+                    pos_prev[1] + alpha * dP[1] - c1,
+                    pos_prev[2] + alpha * dP[2] - c2};
+    double r0 = sqrt(P0[0] * P0[0] + P0[1] * P0[1] + P0[2] * P0[2]);
+    if (r0 > 0.0)
+    {
+      double F0 = chi_prev + alpha * dchi - r0;
+      double Fp0 = dchi - (P0[0] * dP[0] + P0[1] * dP[1] + P0[2] * dP[2]) / r0;
+      if (fabs(Fp0) > newton_eps)
+      {
+        double alpha1 = alpha - F0 / Fp0;
+        if (alpha1 < 0.0)
+          alpha1 = 0.0;
+        else if (alpha1 > 1.0)
+          alpha1 = 1.0;
+        alpha = alpha1;
+      }
+    }
+  }
 
   /* Optional sanity print for a few crossings */
   {
@@ -2498,6 +2529,8 @@ int mass_maps_particle_sign_change(int rep_id,
     entry_pos[1] = pos_prev[1] + alpha * (pos_curr[1] - pos_prev[1]);
     entry_pos[2] = pos_prev[2] + alpha * (pos_curr[2] - pos_prev[2]);
   }
+  if (chi_cross_out)
+    *chi_cross_out = chi_prev + alpha * (chi_curr - chi_prev);
   return 1;
 }
 
