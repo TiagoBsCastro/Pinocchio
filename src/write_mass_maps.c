@@ -554,6 +554,61 @@ static void mass_maps_write_filter_keywords(fitsfile *fptr, int segment_index)
 #endif
 }
 
+/**
+ * mass_maps_write_cosmology_keywords
+ * -----------------------------------
+ * Purpose
+ *   Write the main cosmological parameters from `params` into the current HDU
+ *   of the given FITS file so that downstream consumers can read the assumed
+ *   cosmology directly from the map header.
+ *
+ * Parameters
+ *   - fptr  Open CFITSIO file handle positioned at the HDU to annotate.
+ *
+ * Notes
+ *   - Non-fatal on error: reports via fits_report_error but does not abort.
+ **/
+static void mass_maps_write_cosmology_keywords(fitsfile *fptr)
+{
+  if (!fptr)
+    return;
+  int status = 0;
+  double val;
+
+  val = params.Omega0;
+  fits_update_key(fptr, TDOUBLE, "COS_OM0", &val, "Omega_m at z=0", &status);
+  val = params.OmegaLambda;
+  fits_update_key(fptr, TDOUBLE, "COS_OL0", &val, "Omega_Lambda at z=0", &status);
+  val = params.OmegaBaryon;
+  fits_update_key(fptr, TDOUBLE, "COS_OB0", &val, "Omega_baryon at z=0", &status);
+  val = params.Hubble100;
+  fits_update_key(fptr, TDOUBLE, "COS_H100", &val, "H0 / (100 km/s/Mpc)", &status);
+  val = params.Sigma8;
+  fits_update_key(fptr, TDOUBLE, "COS_S8", &val, "sigma8 normalization", &status);
+  val = params.PrimordialIndex;
+  fits_update_key(fptr, TDOUBLE, "COS_NS", &val, "Primordial spectral index", &status);
+  val = params.DEw0;
+  fits_update_key(fptr, TDOUBLE, "COS_W0", &val, "Dark-energy w0", &status);
+  val = params.DEwa;
+  fits_update_key(fptr, TDOUBLE, "COS_WA", &val, "Dark-energy wa", &status);
+
+  {
+    char hist[128];
+    snprintf(hist, sizeof(hist),
+             "COSMOLOGY: Om0=%.4f OL0=%.4f Ob0=%.4f h=%.4f s8=%.4f ns=%.4f w0=%.4f wa=%.4f",
+             params.Omega0, params.OmegaLambda, params.OmegaBaryon,
+             params.Hubble100, params.Sigma8, params.PrimordialIndex,
+             params.DEw0, params.DEwa);
+    fits_write_history(fptr, hist, &status);
+  }
+
+  if (status)
+  {
+    /* Non-fatal: report but continue */
+    fits_report_error(stderr, status);
+  }
+}
+
 #ifdef SNAPSHOT
 /* Forward declaration: back-distribute ZACC (and group_ID) from fragment sub-boxes to products FFT tiles */
 int distribute_back(void);
@@ -1682,6 +1737,7 @@ int mass_maps_write_segment_map(int s)
     fits_update_key(fptr, TDOUBLE, "AXISV2", &plc.zvers[1], "PLC axis y-component", &status);
     fits_update_key(fptr, TDOUBLE, "AXISV3", &plc.zvers[2], "PLC axis z-component", &status);
     mass_maps_write_filter_keywords(fptr, s);
+    mass_maps_write_cosmology_keywords(fptr);
   }
   {
     long fpixel = 1;
@@ -1719,6 +1775,7 @@ int mass_maps_write_segment_map(int s)
       fits_update_key(fptr, TDOUBLE, "AXISV2", &plc.zvers[1], "PLC axis y-component", &status);
       fits_update_key(fptr, TDOUBLE, "AXISV3", &plc.zvers[2], "PLC axis z-component", &status);
       mass_maps_write_filter_keywords(fptr, s);
+      mass_maps_write_cosmology_keywords(fptr);
       /* Write columns */
       long firstrow = 1;  /* 1-based */
       long firstelem = 1; /* scalar */
@@ -1776,6 +1833,7 @@ int mass_maps_write_segment_map(int s)
     fits_update_key(fptr, TDOUBLE, "AXISV3", &plc.zvers[2], "PLC axis z-component", &status);
     /* Filter metadata (if available) */
     mass_maps_write_filter_keywords(fptr, s);
+    mass_maps_write_cosmology_keywords(fptr);
   }
   {
     /* Write columns: PIXEL (0..Ncap-1) and TEMPERATURE */
