@@ -343,12 +343,26 @@ int compute_derivative(int ThisGrid, int first_derivative, int second_derivative
 
           double diff_comp[4];
 
+          // Map loop-dim k-values to physical axes.
+          // C[d] = physical dim for loop dimension d, so:
+          //   k_phys[C[0]] = k_x (loop-dim 0)
+          //   k_phys[C[1]] = k_y (loop-dim 1)
+          //   k_phys[C[2]] = k_z (loop-dim 2)
+          // For non-transposed C={x,y,z} this is a no-op.
+          // For 1D transposed C={y,x,z}: k_phys[y]=k_x, k_phys[x]=k_y, k_phys[z]=k_z.
+          // For 2D transposed C={y,z,x}: k_phys[y]=k_x, k_phys[z]=k_y, k_phys[x]=k_z.
+          double k_phys[3];
+          k_phys[C[_x_]] = k_x;
+          k_phys[C[_y_]] = k_y;
+          k_phys[C[_z_]] = k_z;
+
           // the components are stored in the vectors that control the differentiation
+          // diff_comp[1..3] must be physical kx, ky, kz respectively
 
           diff_comp[0] = 1.0;
-          diff_comp[1] = k_x;
-          diff_comp[2] = k_y;
-          diff_comp[3] = k_z;
+          diff_comp[1] = k_phys[_x_];
+          diff_comp[2] = k_phys[_y_];
+          diff_comp[3] = k_phys[_z_];
 
           double green = greens_function(diff_comp, k_squared, first_derivative, second_derivative);
 
