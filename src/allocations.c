@@ -204,7 +204,13 @@ int organize_main_memory()
   MPI_Bcast(&Nalloc, 1, MPI_UNSIGNED, 0, MPI_COMM_WORLD);
 
   memory.frag_prods = Nalloc * sizeof(product_data);
-  memory.frag_arrays = Nalloc * FRAGFIELDS * sizeof(int);
+  ALIGN_MEMORY_BLOCK(memory.frag_prods);
+  memory.frag_arrays = 0;
+  for (int f = 0; f < FRAGFIELDS; f++)
+  {
+    memory.frag_arrays += Nalloc * sizeof(int);
+    ALIGN_MEMORY_BLOCK(memory.frag_arrays);
+  }
   /* this is the memory occupied by fragmentation */
   memory.frag_allocated = memory.prods + memory.frag_prods + memory.groups + memory.frag_arrays
 #ifdef RECOMPUTE_DISPLACEMENTS
