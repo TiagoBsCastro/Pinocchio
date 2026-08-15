@@ -1056,7 +1056,7 @@ double compute_Nhalos_in_PLC(double z1, double z2)
   double MinMass = log(params.ParticleMass * params.MinHaloMass);
   double delta_z = 0.01;
   double number = 0;
-  double solidangle = (1 - cos((params.PLCAperture > 90. ? 90. : params.PLCAperture) / 180. * PI)) * 2. * PI;
+  double solidangle = (1 - cos(params.PLCAperture / 180. * PI)) * 2. * PI;
 
   double result, error, upper, lower;
   gsl_function Function;
