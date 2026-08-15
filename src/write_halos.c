@@ -840,7 +840,7 @@ int write_PLC(int flag)
 			fprintf(file, "# 5) prediction for number of objects in bin\n");
 			fprintf(file, "#\n");
 
-			double skyarea = (1 - cos((params.PLCAperture > 90. ? 90. : params.PLCAperture) / 180. * PI)) * 2. * PI * pow(180. / PI, 2.);
+			double skyarea = (1 - cos(params.PLCAperture / 180. * PI)) * 2. * PI * pow(180. / PI, 2.);
 			for (int ibin = 0; ibin < nzbins; ibin++)
 			{
 				double zlow = params.LastzForPLC + ibin * plc.delta_z;
